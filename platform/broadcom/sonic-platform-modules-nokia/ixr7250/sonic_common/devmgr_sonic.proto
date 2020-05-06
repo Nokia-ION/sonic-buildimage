@@ -1,0 +1,461 @@
+/**********************************************************************************************************************
+ *  Description: interface between DeviceManager and clients for SONiC
+ *
+ *  Copyright (c) 2018 Nokia
+ ***********************************************************************************************************************/
+
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+package srsonic.devmgr.DevMgrSonic;
+
+// The DeviceManager service definition.
+service DevMgrSonicService
+{
+    rpc GetTempInfo (GetTempRequestPb) returns (UpdateTempInfoPb) {}
+    rpc UpdateLCTempInfo (UpdateTempInfoPb) returns (google.protobuf.Empty) {}
+    rpc ReqTempParams (ReqTempParamsPb) returns (RespTempParamsPb) {}
+
+    rpc ReqPsuInfo (ReqPsuInfoPb) returns (RespPsuInfoPb) {}
+
+    rpc ShowLedPortInfo (ReqLedPortIndexPb) returns (ShowLedPortInfoPb) {}
+
+    rpc UpdateIntfInfo (UpdateIntfInfoPb) returns (google.protobuf.Empty) {}
+    rpc GetSfpEepromInfo (ReqSfpEepromPb) returns (GetSfpEepromInfoPb) {}
+    rpc ManageSfpOpsInfo (ReqSfpOpsPb) returns (RespSfpOpsPb) {}
+
+    rpc GetFanTrayOpsInfo (ReqFanTrayOpsPb) returns (RespFanTrayOpsPb) {}
+    rpc SetFanTraySpeedParams (ReqFanTraySpeedParamsPb) returns (google.protobuf.Empty) {}
+    rpc GetFanTrayEepromInfo (ReqFanTrayEepromPb) returns (RespFanTrayEepromPb) {}
+
+    rpc GetHwInfo (google.protobuf.Empty) returns (GetHwInfoPb) {}
+    rpc ReqHwFirmwareInfo (ReqHwFirmwareInfoPb) returns (RespHwFirmwareInfoPb) {}
+
+    rpc ReqSfmInfo (ReqSfmInfoPb) returns (RespSfmInfoPb) {}
+
+    rpc ReqAdminTech (ReqAdminTechPb) returns (google.protobuf.Empty) {}
+}
+
+message GetTempRequestPb
+{
+    uint32 slot_num                              = 1;
+}
+
+message UpdateTempInfoPb
+{
+    uint32 slot_num                              = 1;
+    int32 current_temp                           = 2;
+    int32 min_temp                               = 3;
+    int32 max_temp                               = 4;
+    int32 margin                                 = 5;
+}
+
+message GetTempDevicePb
+{
+    string sensor_name                           = 1;
+    int32  local                                 = 2;
+    int32  remote                                = 3;
+    string device_desc                           = 4;
+    int32  device_idx                            = 5;
+}
+
+message AllTempDevicePb
+{
+    repeated GetTempDevicePb temp_device         = 1;
+}
+
+message ShowTempInfoPb
+{
+    repeated GetTempDevicePb  temp_device        = 1;
+    repeated UpdateTempInfoPb temp_summary       = 2;
+}
+
+enum ReqTempOpsType
+{
+    TEMP_OPS_INVALID                             = 0;
+    TEMP_OPS_SET_TEMP_OFFSET                     = 1;
+    TEMP_OPS_GET_CURR_TEMP                       = 2;
+    TEMP_OPS_GET_MIN_TEMP                        = 3;
+    TEMP_OPS_GET_MAX_TEMP                        = 4;
+    TEMP_OPS_GET_MARGIN                          = 5;
+    TEMP_OPS_GET_THRESHOLD                       = 6;
+    TEMP_OPS_GET_ALL_PARAMS                      = 7;
+    TEMP_OPS_GET_NAME_IDX_MAPPING                = 8;
+    TEMP_OPS_SHOW_READINGS                       = 9;
+}
+
+message ReqTempParamsPb
+{
+    ReqTempOpsType type                         = 1;
+    string         name                         = 2;
+    int32          idx                          = 3;
+    oneof set_type {
+        int32 temp_offset                       = 4;
+    }
+}
+
+message RespTempParamsPb
+{
+    oneof get_type {
+        int32 curr_temp                         = 1;
+        int32 min_temp                          = 2;
+        int32 max_temp                          = 3;
+        int32 margin                            = 4;
+        int32 threshold                         = 5;
+        UpdateTempInfoPb temp_summary           = 6;
+        AllTempDevicePb  temp_devices           = 7;
+        ShowTempInfoPb   temp_show              = 8;
+    }
+}
+
+message SonicCardDetails
+{
+    string hwsku                                = 1;
+    int32  num_asics                            = 2; // asics in the card
+    int32  slot_num                             = 3;
+    int32  active_cpm_slot_num                  = 4;
+    string is_cpm                               = 5;
+    int32  chassis_num_asics                    = 6; // max asics in a chassis
+}
+
+message UpdateIntfInfoPb
+{
+    string port_name                            = 1;
+    uint32 port_id                              = 2;
+    uint32 port_up                              = 3;
+    uint32 presence                             = 4;
+    uint32 laser_up                             = 5;
+}
+
+enum ReqPsuOpsType
+{
+    PSU_OPS_INVALID                             = 0;
+    PSU_OPS_NUM_PSUS                            = 1;
+    PSU_OPS_GET_PRESENCE                        = 2;
+    PSU_OPS_GET_STATUS                          = 3;
+    PSU_OPS_SHOW_ALL                            = 4;
+    PSU_OPS_GET_VOLTAGE                         = 5;
+    PSU_OPS_GET_TEMP                            = 6;
+}
+
+message ReqPsuInfoPb
+{
+    ReqPsuOpsType type                          = 1;
+    uint32 psu_idx                              = 2;
+}
+
+message GetPsuDevicePb
+{
+    bool psu_presence   = 1;
+    bool psu_status     = 2;
+}
+
+message ShowPsuInfoPb
+{
+    repeated GetPsuDevicePb   psu_device        = 1;
+}
+
+message RespPsuInfoPb {
+    oneof get_psu {
+        uint32 num_psus                         = 1;
+        bool psu_presence                       = 2;
+        bool psu_status                         = 3;
+        ShowPsuInfoPb psu_info                  = 4;
+    }
+}
+
+message ReqLedPortIndexPb
+{
+    uint32 port_start_idx                       = 1;
+    uint32 port_end_idx                         = 2;
+}
+
+message GetLedDevicePb
+{
+    uint32 led_idx                              = 1;
+    string led_status                           = 2;
+}
+
+message ShowLedPortInfoPb
+{
+    repeated GetLedDevicePb   port_device       = 1;
+    GetLedDevicePb            board_device      = 2;
+}
+
+enum ReqSfpEepromType
+{
+    SFP_EEPROM_INVALID                          = 0;
+    SFP_EEPROM_CTRL                             = 1;
+    SFP_EEPROM_DATA                             = 2;
+    SFP_EEPROM_EXT_CTRL                         = 3;
+    SFP_EEPROM_DEBUG                            = 4;
+    SFP_EEPROM_UPPER_PAGE                       = 5;
+    SFP_EEPROM_UPPER_BANK_AND_PAGE              = 6;
+}
+
+message ReqSfpEepromPb
+{
+    ReqSfpEepromType etype                      = 1;
+    uint32 hw_port_id                           = 2;
+    uint32 offset                               = 3;
+    uint32 num_bytes                            = 4;
+    uint32 page                                 = 5;
+    uint32 bank                                 = 6;
+}
+
+message GetSfpEepromInfoPb
+{
+    bytes data                                  = 1;
+}
+
+enum ReqSfpOpsType
+{
+    SFP_OPS_INVALID                             = 0;
+    SFP_OPS_REQ_PRESENCE                        = 1;
+    SFP_OPS_REQ_RESET                           = 2;
+    SFP_OPS_GET_RESET_STATUS                    = 3;
+    SFP_OPS_REQ_LPMODE                          = 4;
+    SFP_OPS_GET_LPMODE_STATUS                   = 5;
+    SFP_OPS_GET_MPORT_STATUS                    = 6;
+}
+
+message ReqSfpOpsPb
+{
+    ReqSfpOpsType type                          = 1;
+    uint32 hw_port_id_begin                     = 2;
+    uint32 hw_port_id_end                       = 3;
+    uint32 val                                  = 4;
+}
+
+message RespSfpStatusPb
+{
+    bool status                                 = 1;
+}
+
+message RespSfpIdStatusPb
+{
+    uint32 port_idx                             = 1;
+    bool   status                               = 2;
+}
+
+message RespMultiPortStatusPb
+{
+    repeated RespSfpIdStatusPb  port_status     = 1;
+}
+
+message RespSfpOpsPb
+{
+    oneof resp_type {
+        RespSfpStatusPb          sfp_status     = 1;
+        RespMultiPortStatusPb    sfp_mstatus    = 2;
+    }
+}
+
+enum ReqFanTrayOpsType
+{
+    FAN_OPS_INVALID                             = 0;
+    FAN_OPS_GET_NUM_TRAYS                       = 1;
+    FAN_OPS_REQ_PRESENCE                        = 2;
+    FAN_OPS_REQ_STATUS                          = 3;
+    FAN_OPS_GET_SPEED                           = 4;
+    FAN_OPS_GET_SPEED_RPM                       = 5;
+    FAN_OPS_SET_SPEED                           = 6;
+    FAN_OPS_DISABLE_ALGORITHM                   = 7;
+    FAN_OPS_SHOW_ALL                            = 8;
+}
+
+message ReqFanTrayIndexPb
+{
+    uint32 fantray_idx                          = 1;
+}
+
+message GetNumFanTrayInfoPb
+{
+    uint32 num_fantrays                         = 1;
+}
+
+message GetFanTrayPresenceInfoPb
+{
+    bool fantray_presence                       = 1;
+}
+
+message GetFanTrayStatusInfoPb
+{
+    string fantray_status                       = 1;
+}
+
+message GetFanTraySpeedPercentPb
+{
+    uint32 fantray_speed                        = 1;
+}
+
+message GetFanTraySpeedRpmPb
+{
+    uint32 fantray_speed_rpm                    = 1;
+}
+
+message GetFanDevicePb
+{
+    string fan_state    = 1;
+}
+
+message ShowFanInfoPb
+{
+    repeated GetFanDevicePb   fan_device        = 1;
+    uint32   fan_algorithm_disable              = 2;
+    uint32   current_fan_speed                  = 3;
+    uint32   max_fan_speed                      = 4;
+    bool     is_force_max_speed                 = 5;
+}
+
+message ReqFanTrayOpsPb
+{
+    ReqFanTrayOpsType type                      = 1;
+    ReqFanTrayIndexPb idx                       = 2;
+}
+
+message RespFanTrayOpsPb
+{
+    oneof resp_type {
+        GetNumFanTrayInfoPb      fan_nums       = 1;
+        GetFanTrayPresenceInfoPb fan_presence   = 2;
+        GetFanTrayStatusInfoPb   fan_status     = 3;
+        GetFanTraySpeedPercentPb fan_speed      = 4;
+        GetFanTraySpeedRpmPb     fan_speed_rpm  = 5;
+        ShowFanInfoPb            fan_show       = 6;
+    }
+}
+
+message SetFanTrayAlgorithmPb
+{
+    uint32 fantray_algo_disable                 = 1;
+}
+
+message ReqFanTraySpeedParamsPb
+{
+    ReqFanTrayOpsType type                      = 1;
+    ReqFanTrayIndexPb idx                       = 2;
+    oneof set_type {
+        GetFanTraySpeedPercentPb fan_speed      = 3;
+        SetFanTrayAlgorithmPb    fan_algo       = 4;
+    }
+}
+
+enum ReqFanTrayEepromType
+{
+    FAN_EEPROM_INVALID                          = 0;
+    FAN_EEPROM_SERIALNO                         = 1;
+    FAN_EEPROM_PARTNO                           = 2;
+}
+
+message ReqFanTrayEepromPb
+{
+    ReqFanTrayIndexPb    idx                    = 1;
+    ReqFanTrayEepromType etype                  = 2;
+}
+
+message RespFanTrayEepromPb
+{
+    string fantray_edata                        = 1;
+}
+
+message GetHwDevicePb
+{
+    uint32  slot_num                             = 1;
+    string  hw_name                              = 2;
+    string  state                                = 3;
+}
+
+message GetHwInfoPb
+{
+    repeated GetHwDevicePb  hw_device            = 1;
+}
+
+enum HwFirmwareDeviceType
+{
+    HW_FIRMWARE_DEVICE_INVALID                   = 0;
+    HW_FIRMWARE_DEVICE_BIOS                      = 1;
+    HW_FIRMWARE_DEVICE_FPGA1                     = 2;
+    HW_FIRMWARE_DEVICE_FPGA2                     = 3;
+}
+
+enum ReqHwFirmwareOpsType
+{
+    REQ_HWFW_OPS_INVALID                         = 0;
+    REQ_HWFW_OPS_SHOW_VERSION                    = 1;
+}
+
+message ReqHwFirmwareInfoPb
+{
+    ReqHwFirmwareOpsType   type                  = 1;
+    HwFirmwareDeviceType   dev_type              = 2;
+}
+
+message RespHwFirmwareInfoPb
+{
+    oneof resp_fw {
+        string version                           = 1;
+    }
+}
+
+enum ReqSfmOpsType
+{
+    SFM_OPS_INVALID                              = 0;
+    SFM_OPS_SHOW_SUMMARY                         = 1;
+    SFM_OPS_SHOW_IMMLINKS                        = 2;
+}
+
+message ReqSfmInfoPb
+{
+    ReqSfmOpsType          type                  = 1;
+    uint32                 imm_slot              = 2;
+}
+
+message GetSfmInfoPb
+{
+    uint32  sfm_num                              = 1;
+    uint32  hw_slot                              = 2;
+    uint32  admin_down                           = 3;
+    uint32  is_initialized                       = 4;
+    uint32  num_ramons                           = 5;
+    uint32  presence                             = 6;
+    uint32  error                                = 7;
+    uint32  instance                             = 8;
+}
+
+message GetSfmSummaryPb
+{
+    repeated GetSfmInfoPb sfm_info               = 1;
+}
+
+message GetSfmImmLinkPb
+{
+    uint32 imm_unit                              = 1;
+    uint32 imm_link                              = 2;
+    uint32 sfm_unit                              = 3;
+    uint32 sfm_link                              = 4;
+    bool   link_status_up                        = 5;
+    bool   link_is_isolate                       = 6;
+    uint32 link_module_id                        = 7;
+}
+
+message GetSfmImmInfoPb
+{
+    uint32 imm_slot                              = 1;
+    uint32 sfm_slot                              = 2;
+    uint32 up_links                              = 3;
+    uint32 total_links                           = 4;
+    repeated GetSfmImmLinkPb  link_info          = 5;
+}
+
+message RespSfmInfoPb
+{
+    oneof resp_sfm {
+        GetSfmSummaryPb     sfm_summary           = 1;
+        GetSfmImmInfoPb     sfm_imm_info          = 2;
+    }
+}
+
+message ReqAdminTechPb
+{
+    string admintech_path                      = 1;
+}

@@ -1,0 +1,7 @@
+ixr7250/utils/nokia_ixr7250_drivers.py usr/local/bin
+common/utils/device-manager.sh usr/local/bin
+ixr7250/service/ixr7250-platform-init.service etc/systemd/system
+ixr7250/utils/70-persistent-net.rules etc/udev/rules.d
+ixr7250/utils/sensors usr/local/bin
+ixr7250/utils/nokia_cmd usr/local/bin
+ixr7250/modules/sonic_platform-1.0-py2-none-any.whl usr/share/sonic/device/x86_64-nokia_ixr7250-r0

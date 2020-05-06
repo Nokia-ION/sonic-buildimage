@@ -298,10 +298,25 @@ SONIC_TARGET_LIST += $(addprefix $(DEBS_PATH)/, $(SONIC_ONLINE_DEBS))
 #     SONIC_ONLINE_FILES += $(SOME_NEW_FILE)
 $(addprefix $(FILES_PATH)/, $(SONIC_ONLINE_FILES)) : $(FILES_PATH)/% : .platform
 	$(HEADER)
+	$(info "Downloading online files": $@ " url:" $($*_URL))
 	curl -L -f -o $@ $($*_URL) $(LOG)
 	$(FOOTER)
 
 SONIC_TARGET_LIST += $(addprefix $(FILES_PATH)/, $(SONIC_ONLINE_FILES))
+
+# Download regular files from online location
+# Files are stored in deb packages directory for convenience
+# Add new file for download:
+#     SOME_NEW_FILE = some_new_file
+#     $(SOME_NEW_FILE)_URL = https://url/to/this/file
+#     SONIC_ONLINE_DOCKERS += $(SOME_NEW_FILE)
+$(addprefix $(TARGET_PATH)/, $(SONIC_ONLINE_DOCKERS)) : $(TARGET_PATH)/% : .platform
+	$(HEADER)
+	$(info "Downloading online dockers": $@ " url:" $($*_URL))
+	wget --no-use-server-timestamps -O  $@ $($*_URL) $(LOG)
+	$(FOOTER)
+
+SONIC_TARGET_LIST += $(addprefix $(TARGET_PATH)/, $(SONIC_ONLINE_DOCKERS))
 
 ###############################################################################
 ## Build targets
@@ -742,6 +757,7 @@ $(addprefix $(TARGET_PATH)/, $(SONIC_INSTALLERS)) : $(TARGET_PATH)/% : \
                 $(LIBNSS_TACPLUS) \
                 $(MONIT)) \
         $$(addprefix $(TARGET_PATH)/,$$($$*_DOCKERS)) \
+        $$(addprefix $(TARGET_PATH)/,$(SONIC_ONLINE_DOCKERS)) \
         $$(addprefix $(FILES_PATH)/,$$($$*_FILES)) \
 	$(if $(findstring y,$(ENABLE_ZTP)),$(addprefix $(DEBS_PATH)/,$(SONIC_ZTP))) \
 	$(addprefix $(STRETCH_FILES_PATH)/, $(if $(filter $(CONFIGURED_ARCH),amd64), $(IXGBE_DRIVER))) \
@@ -772,7 +788,7 @@ $(addprefix $(TARGET_PATH)/, $(SONIC_INSTALLERS)) : $(TARGET_PATH)/% : \
 	export enable_pfcwd_on_start="$(ENABLE_PFCWD_ON_START)"
 	export installer_debs="$(addprefix $(STRETCH_DEBS_PATH)/,$($*_INSTALLS))"
 	export lazy_installer_debs="$(foreach deb, $($*_LAZY_INSTALLS),$(foreach device, $($(deb)_PLATFORM),$(addprefix $(device)@, $(STRETCH_DEBS_PATH)/$(deb))))"
-	export installer_images="$(addprefix $(TARGET_PATH)/,$($*_DOCKERS))"
+	export installer_images="$(addprefix $(TARGET_PATH)/,$($*_DOCKERS)) $(addprefix $(TARGET_PATH)/,$(SONIC_ONLINE_DOCKERS))"
 	export config_engine_wheel_path="$(addprefix $(PYTHON_WHEELS_PATH)/,$(SONIC_CONFIG_ENGINE))"
 	export swsssdk_py2_wheel_path="$(addprefix $(PYTHON_WHEELS_PATH)/,$(SWSSSDK_PY2))"
 	export platform_common_py2_wheel_path="$(addprefix $(PYTHON_WHEELS_PATH)/,$(SONIC_PLATFORM_COMMON_PY2))"
@@ -897,6 +913,7 @@ SONIC_CLEAN_TARGETS += $(addsuffix -clean,$(addprefix $(TARGET_PATH)/, \
 		       $(SONIC_DOCKER_IMAGES) \
 		       $(SONIC_DOCKER_DBG_IMAGES) \
 		       $(SONIC_SIMPLE_DOCKER_IMAGES) \
+		       $(SONIC_ONLINE_DOCKERS) \
 		       $(SONIC_INSTALLERS)))
 $(SONIC_CLEAN_TARGETS) :: $(TARGET_PATH)/%-clean : .platform
 	@rm -f $(TARGET_PATH)/$*

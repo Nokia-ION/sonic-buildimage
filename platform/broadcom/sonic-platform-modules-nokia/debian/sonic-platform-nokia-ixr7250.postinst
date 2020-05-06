@@ -1,0 +1,2 @@
+systemctl enable ixr7250-platform-init.service
+systemctl start ixr7250-platform-init.service

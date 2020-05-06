@@ -665,6 +665,25 @@ int get_hwsku(const char *platform, char *hwsku, const int max_length)
   return 0;
 }
 
+static int ixr7250_bdb_reorder_module(char* platform)
+{
+    FILE *fp = NULL;
+    char path[513] = "";
+
+    snprintf(path, 512,
+             "/usr/share/sonic/device/%s/systemd-gen-script.sh",
+             platform);
+    fp = popen(path, "r");
+    if (fp == NULL) {
+        SYSTEMD_LOG(info, "failed to run %s\n", path);
+        return -1;
+    }
+
+    SYSTEMD_LOG(info,"fixed i2c module load order. script %s", path);
+    /* close */
+    pclose(fp);
+}
+
 static int get_num_of_asic() {
     /***
     Determines if the current platform is single or multi-ASIC
@@ -705,6 +724,10 @@ static int get_num_of_asic() {
     fclose(fp);
     if(platform != NULL) {
         // Get Hardware Sku by reading eeprom
+
+        /* TODO: Needs to be fixed with proper API. This is an issue with IXR7250 when sonic loaded via BDB. */
+        ixr7250_bdb_reorder_module(platform);
+
         get_hwsku(platform, hwsku, sizeof(hwsku));
         if (strlen(hwsku) > 0) {
             snprintf(asic_file, 512, "/usr/share/sonic/device/%s/%s/asic.conf", platform, hwsku);

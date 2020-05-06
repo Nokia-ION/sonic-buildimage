@@ -1,0 +1,29 @@
+Copyright (c) 2019, Nokia Networks
+All rights reserved.
+
+
+Nokia intent is to use devicemgr to implement items below 
+
+Front panel LEDs
+================
+
+System FANs
+===========
+
+Temperature sensors
+===================
+
+System PSUs
+===========
+
+SFPs
+====
+
+Sensor details
+==============
+
+Platform poweroff
+=================
+
+Platform monitoring daemon
+==========================

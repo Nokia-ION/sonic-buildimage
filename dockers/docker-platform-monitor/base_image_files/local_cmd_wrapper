@@ -1,0 +1,15 @@
+#!/bin/bash
+
+if [ -e /usr/local/bin/sensors ]; then
+    sudo /usr/local/bin/sensors
+    return
+fi
+
+DOCKER_EXEC_FLAGS="i"
+
+# Determine whether stdout is on a terminal
+if [ -t 1 ] ; then
+    DOCKER_EXEC_FLAGS+="t"
+fi
+
+docker exec -$DOCKER_EXEC_FLAGS pmon $(basename $0) "$@"

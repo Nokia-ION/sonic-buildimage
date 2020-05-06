@@ -1,0 +1,11 @@
+#!/bin/bash
+
+DOCKER_EXEC_FLAGS="i"
+
+# Determine whether stdout is on a terminal
+if [ -t 1 ] ; then
+    DOCKER_EXEC_FLAGS+="t"
+fi
+
+#docker exec -$DOCKER_EXEC_FLAGS pmon $(basename $0) "$@"
+docker exec -$DOCKER_EXEC_FLAGS pmon python /usr/local/lib/python2.7/dist-packages/sonic_common/nokia_ixr7250_util.py "$@"

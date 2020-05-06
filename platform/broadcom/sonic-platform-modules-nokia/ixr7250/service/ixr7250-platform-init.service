@@ -1,0 +1,19 @@
+[Unit]
+Description=Nokia IXR-7250 initialization service
+Before=database.service
+Before=opennsl-modules.service
+After=sysinit.target
+After=docker.service
+After=rc-local.service
+DefaultDependencies=no
+Requires=docker.service
+
+[Service]
+User=root
+EnvironmentFile=/etc/environment
+ExecStartPre=/bin/bash /usr/local/bin/device-manager.sh start
+ExecStart=/bin/bash /usr/local/bin/device-manager.sh wait
+ExecStop=/bin/bash /usr/local/bin/device-manager.sh stop
+
+[Install]
+WantedBy=multi-user.target

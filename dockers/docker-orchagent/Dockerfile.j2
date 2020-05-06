@@ -64,7 +64,7 @@ RUN apt-get clean -y        && \
 
 COPY ["files/arp_update", "/usr/bin"]
 COPY ["enable_counters.py", "/usr/bin"]
-COPY ["start.sh", "orchagent.sh", "swssconfig.sh", "/usr/bin/"]
+COPY ["start.sh", "orchagent.sh", "swssconfig.sh", "nbrmgrd.sh","/usr/bin/"]
 COPY ["supervisord.conf", "/etc/supervisor/conf.d/"]
 COPY ["files/supervisor-proc-exit-listener", "/usr/bin"]
 COPY ["critical_processes", "/etc/supervisor/"]
