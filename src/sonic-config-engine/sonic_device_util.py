@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import yaml
+import json
 import subprocess
 import re
 
@@ -36,6 +37,24 @@ def get_platform_info(machine_info):
         elif machine_info.has_key('aboot_platform'):
             return machine_info['aboot_platform']
     return None
+
+def is_chassis_card_cp():
+    is_cp = False
+    card_detail ="/etc/sonic/card_details.json"
+    if not os.path.isfile(card_detail):
+        return 0
+    with open(card_detail, "r") as read_file:
+        data = json.load(read_file)
+        if data.has_key('is_cpm'):
+            if data['is_cpm'] == 'Yes':
+                is_cp = True
+    return is_cp
+
+
+def instance_has_ports(platform, hwsku, asic):
+    if platform == "x86_64-nokia_ixr7250-r0" and asic is None:
+        return False
+    return True
 
 def get_sonic_version_info():
     if not os.path.isfile('/etc/sonic/sonic_version.yml'):

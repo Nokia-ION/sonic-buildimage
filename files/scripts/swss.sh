@@ -136,6 +136,7 @@ start() {
         sonic-netns-exec "$NET_NS" sonic-db-cli ASIC_DB FLUSHDB
         sonic-netns-exec "$NET_NS" sonic-db-cli COUNTERS_DB FLUSHDB
         sonic-netns-exec "$NET_NS" sonic-db-cli FLEX_COUNTER_DB FLUSHDB
+        sonic-netns-exec "$NET_NS" sonic-db-cli VOQ_DB FLUSHDB
         clean_up_tables STATE_DB "'PORT_TABLE*', 'MGMT_PORT_TABLE*', 'VLAN_TABLE*', 'VLAN_MEMBER_TABLE*', 'LAG_TABLE*', 'LAG_MEMBER_TABLE*', 'INTERFACE_TABLE*', 'MIRROR_SESSION*', 'VRF_TABLE*', 'FDB_TABLE*'"
     fi
 

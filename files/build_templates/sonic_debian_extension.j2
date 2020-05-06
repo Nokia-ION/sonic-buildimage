@@ -40,6 +40,7 @@ FILESYSTEM_ROOT_ETC="$FILESYSTEM_ROOT/etc"
 FILESYSTEM_ROOT_ETC_SONIC="$FILESYSTEM_ROOT_ETC/sonic"
 
 GENERATED_SERVICE_FILE="$FILESYSTEM_ROOT/etc/sonic/generated_services.conf"
+EXCLUDED_SERVICE_FILE="$FILESYSTEM_ROOT/etc/sonic/excluded_services.conf"
 
 clean_sys() {
     sudo umount $FILESYSTEM_ROOT/sys/fs/cgroup/*            \
@@ -335,7 +336,6 @@ sudo dpkg --root=$FILESYSTEM_ROOT -i {{deb}} || sudo LANG=C DEBIAN_FRONTEND=noni
 {% endfor %}
 {% endif %}
 
-## Run depmod command for target kernel modules
 sudo LANG=C chroot $FILESYSTEM_ROOT depmod -a {{kversion}}
 
 ## download all dependency packages for platform debian packages
@@ -422,6 +422,11 @@ if [ -f {{service}} ]; then
     MULTI_INSTANCE="{{service}}"
     SINGLE_INSTANCE=${MULTI_INSTANCE/"@"}
     sudo cp $SINGLE_INSTANCE $FILESYSTEM_ROOT/etc/systemd/system/
+    {% if "database" in service %}
+    echo "$SINGLE_INSTANCE" > /dev/null
+    {% else %}
+    echo "$SINGLE_INSTANCE" | sudo tee -a $EXCLUDED_SERVICE_FILE
+    {% endif %}      
     {% endif %}
 
     echo "{{service}}" | sudo tee -a $GENERATED_SERVICE_FILE

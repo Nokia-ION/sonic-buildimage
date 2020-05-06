@@ -19,6 +19,9 @@ REDIS_HOSTNAME = 'localhost'
 REDIS_PORT = 6379
 REDIS_TIMEOUT_MSECS = 0
 
+REDIS_UNIX_SOCKET_PATH='/var/run/redis'
+REDIS_UNIX_SOCKET_INFO='/redis.sock'
+
 # Platform root directory inside docker
 PLATFORM_ROOT_DOCKER = '/usr/share/sonic/platform'
 SONIC_CFGGEN_PATH = '/usr/local/bin/sonic-cfggen'
@@ -41,6 +44,12 @@ def db_connect(db):
     return swsscommon.DBConnector(db,
                                   REDIS_HOSTNAME,
                                   REDIS_PORT,
+                                  REDIS_TIMEOUT_MSECS)
+
+def db_unix_connect(db, namespace):
+    from swsscommon import swsscommon
+    return swsscommon.DBConnector(db,
+                                  REDIS_UNIX_SOCKET_PATH+str(namespace)+REDIS_UNIX_SOCKET_INFO,
                                   REDIS_TIMEOUT_MSECS)
 
 #

@@ -41,6 +41,7 @@ from portconfig import get_port_config
 from sonic_device_util import get_machine_info
 from sonic_device_util import get_platform_info
 from sonic_device_util import get_system_mac
+from sonic_device_util import instance_has_ports
 from config_samples import generate_sample_config
 from config_samples import get_available_config
 from swsssdk import SonicV2Connector, ConfigDBConnector
@@ -227,11 +228,12 @@ def main():
             'hwsku': hwsku
             }}}
         deep_update(data, hardware_data)
-        (ports, _) = get_port_config(hwsku, platform, args.port_config)
-        if not ports:
-            print('Failed to get port config', file=sys.stderr)
-            sys.exit(1)
-        deep_update(data, {'PORT': ports})
+        if args.port_config is not None or instance_has_ports(platform, hwsku,None):
+            (ports, _) = get_port_config(hwsku, platform, args.port_config)
+            if not ports:
+                print('Failed to get port config', file=sys.stderr)
+                sys.exit(1)
+            deep_update(data, {'PORT': ports})
 
     for json_file in args.json:
         with open(json_file, 'r') as stream:

@@ -7,4 +7,10 @@ if [ -t 1 ] ; then
     DOCKER_EXEC_FLAGS+="t"
 fi
 
-docker exec -$DOCKER_EXEC_FLAGS database redis-cli "$@"
+[ "$1" -eq "$1" ] 2> /dev/null # check if the first argument is a number
+if [ $? -eq 0 ]; then # if it's a number, set the database instance to operate on
+	DEV="$1"
+	shift
+fi
+
+docker exec -$DOCKER_EXEC_FLAGS database$DEV redis-cli "$@"

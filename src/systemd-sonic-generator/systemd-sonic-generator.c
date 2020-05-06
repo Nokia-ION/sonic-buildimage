@@ -14,12 +14,30 @@
 #define MAX_NUM_UNITS 128
 #define MAX_BUF_SIZE 512
 
+#define SYSTEMD_LOG(method, ...)                                               \
+  ({                                                                           \
+    FILE *fp = fopen("/var/log/systemd-sonic-gen.log", "a+");                  \
+    if (fp != NULL) {                                                          \
+      fprintf(fp, __VA_ARGS__);                                                \
+      fprintf(fp, "\n");                                                       \
+      fclose(fp);                                                              \
+    }                                                                          \
+  })
+
 static const char* UNIT_FILE_PREFIX = "/etc/systemd/system/";
 static const char* CONFIG_FILE = "/etc/sonic/generated_services.conf";
 static const char* MACHINE_CONF_FILE = "/host/machine.conf";
 static int num_asics;
 static char** multi_instance_services;
 static int num_multi_inst;
+
+static const char* EXCLUDED_FILE = "/etc/sonic/excluded_services.conf";
+static char** excluded_services;
+static int num_excluded_inst=0;
+static char *hw_type=NULL;  /* CPM or IOM */
+static int is_cpm = false;
+#define CPM_HW_TYPE "CPM"
+#define IOM_HW_TYPE "IOM"
 
 void strip_trailing_newline(char* str) {
     /***
@@ -89,6 +107,56 @@ static bool is_multi_instance_service(char *service_name){
     return false;
 
 }
+
+
+static void get_excluded_services()
+{
+    /***
+        Get a list of excluded service files which are supported in CPM
+    ***/
+    FILE *fp;
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    char *pos;
+
+    if (!is_cpm) {
+        /* Execluded service is only appplicable to CPM module */
+        SYSTEMD_LOG(info, "Not a CPM module. No execluded services");
+        return;
+    }
+    
+    fp = fopen(EXCLUDED_FILE, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "Failed to open %s\n", EXCLUDED_FILE);
+        return;
+    }
+    excluded_services = malloc(MAX_NUM_UNITS * sizeof(char *));
+    num_excluded_inst = 0;
+    while ((read = getline(&line, &len, fp)) != -1) {
+        strip_trailing_newline(line);
+        /* pos should not be NULL if service file name is correct.
+           store the filename without the extension.
+        */
+        excluded_services[num_excluded_inst] = strdup(line);
+        num_excluded_inst++;
+    }
+    SYSTEMD_LOG(info,"Total exclued service file = %d", num_excluded_inst);
+    free(line);
+    fclose(fp);    
+}
+
+static int is_excluded_service(char *service_name)
+{
+    int i;
+    for(i=0; i < num_excluded_inst; i++){
+        if (strstr(service_name, excluded_services[i]) != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
 
 static int get_install_targets_from_line(char* target_string, char* install_type, char* targets[], int existing_targets) {
     /***
@@ -182,8 +250,9 @@ static void replace_multi_inst_dep(char *src) {
                     fputs(buf,fp_tmp);
                 } else {
                     service_name = strdup(word);
-                    service_name = strtok(service_name, ".");
-		    type = strtok(NULL, " ");
+                    char *type = strchr(service_name, '.');
+                     *type= '\0';
+                     type++;
                     if (is_multi_instance_service(word)) {
                         for(i = 0; i < num_asics; i++){
                             snprintf(buf, MAX_BUF_SIZE, "%s=%s@%d.%s\n",
@@ -209,6 +278,74 @@ static void replace_multi_inst_dep(char *src) {
     remove(src);
     rename(tmp_file_path, src);
 }
+
+static void replace_excluded_inst_dep(char *src)
+{
+    FILE *fp_src;
+    FILE *fp_tmp;
+    char buf[MAX_BUF_SIZE];
+    char* line = NULL;
+    int i;
+    ssize_t len;
+    char *token;
+    char *word;
+    char *line_copy;
+    char *service_name;
+    char *type;
+    char* dot_ptr;
+    ssize_t nread;
+    bool section_done = false;
+    char tmp_file_path[PATH_MAX];
+    
+    /* assumes that the service files has 3 sections,
+     * in the order: Unit, Service and Install.
+     * Read service dependency from Unit and Install 
+     * sections, replace if dependent on multi instance
+     * service.
+     */
+    fp_src = fopen(src, "r");
+    if (fp_src == NULL) {
+        SYSTEMD_LOG(info, "replace_excluded_inst_dep() file %s not found",src);
+        return;
+    }
+    snprintf(tmp_file_path, PATH_MAX, "%s.tmp", src);
+    fp_tmp = fopen(tmp_file_path, "w");
+
+    while ((nread = getline(&line, &len, fp_src)) != -1 ) {
+        if (strstr(line, "[Service]") != NULL) {
+            section_done = true;
+            fputs(line,fp_tmp);
+        } else if (strstr(line, "[Install]") != NULL)  {
+            section_done = false;
+            fputs(line,fp_tmp);
+        } else if ((strstr(line, "[Unit]") != NULL) ||
+           (strstr(line, "Description") != NULL) ||
+           (section_done == true)){
+            fputs(line,fp_tmp);
+        } else {
+            line_copy = strdup(line);
+            token = strtok(line_copy, "=");
+            while ((word = strtok(NULL, " "))){
+                if (is_excluded_service(word)) {
+                    continue;
+                } else {
+                    snprintf(buf, MAX_BUF_SIZE,"%s=%s\n",token, word);
+                    fputs(buf,fp_tmp);
+                } 
+            }
+            free(line_copy);
+        }
+    }
+    fclose(fp_src);
+    fclose(fp_tmp);
+    free(line);
+    /* remove the .service file, rename the .service.tmp file
+     * as .service.
+     */
+    remove(src);
+    rename(tmp_file_path, src);  
+}
+
 
 static int get_install_targets(char* unit_file, char* targets[]) {
     /***
@@ -241,6 +378,14 @@ static int get_install_targets(char* unit_file, char* targets[]) {
     }
     free(instance_name);
 
+    /* Handle dependency files in the excluded list
+     * If num_asic is 0, the excluded_service list is
+     * built and applied. Such as for CPM module
+     */
+    if (num_asics == 0) {
+       replace_excluded_inst_dep(file_path);
+    }
+    
     num_target_lines = get_target_lines(file_path, target_lines);
     if (num_target_lines < 0) {
         fprintf(stderr, "Error parsing targets for %s\n", unit_file);
@@ -314,7 +459,7 @@ static int get_unit_files(char* unit_files[]) {
 
         /* topology service to be started only for multiasic VS platform */
         if ((strcmp(line, "topology.service") == 0) &&
-                        (num_asics == 1)) {
+                        (num_asics <= 1)) {
             continue;
         }
         unit_files[num_unit_files] = strdup(line);
@@ -488,6 +633,38 @@ static int install_unit_file(char* unit_file, char* target, char* install_dir) {
 }
 
 
+
+
+int get_hwsku(const char *platform, char *hwsku, const int max_length)
+{
+  FILE *fp = NULL;
+  char path[512] = "";
+  char result_buffer[512] = "";
+  int start = 0;
+    
+  snprintf(path, sizeof(path), "/usr/share/sonic/device/%s/get_hwsku", platform);
+  fp = popen(path, "r");
+  if (fp == NULL) {
+      fprintf(stderr, "failed to run %s\n", path);
+      return -1;
+  }
+
+  while (fgets(result_buffer, sizeof(result_buffer), fp) != NULL) {
+      if (start + strlen(result_buffer) < max_length) {
+          strncpy(hwsku + start, result_buffer, max_length);
+          start += strlen(result_buffer);
+      } else {
+          break;
+      }
+  }
+
+  SYSTEMD_LOG(info,"get_hwsku = %s", hwsku);
+  /* close */
+  pclose(fp);
+
+  return 0;
+}
+
 static int get_num_of_asic() {
     /***
     Determines if the current platform is single or multi-ASIC
@@ -497,17 +674,21 @@ static int get_num_of_asic() {
     char *line = NULL;
     char* token;
     char* platform;
+    char  hwsku[512]="";
     size_t len = 0;
     ssize_t nread;
     bool ans;
     char asic_file[512];
     char* str_num_asic;
     int num_asic = 1;
+    char* hw_type_ptr;
+    is_cpm = false;
 
     fp = fopen(MACHINE_CONF_FILE, "r");
 
     if (fp == NULL) {
         fprintf(stderr, "Failed to open %s\n", MACHINE_CONF_FILE);
+        SYSTEMD_LOG(info,"get_num_of_asic() failed to open file %s", MACHINE_CONF_FILE);
         exit(EXIT_FAILURE);
     }
 
@@ -523,23 +704,40 @@ static int get_num_of_asic() {
 
     fclose(fp);
     if(platform != NULL) {
-        snprintf(asic_file, 512, "/usr/share/sonic/device/%s/asic.conf", platform);
-        fp = fopen(asic_file, "r");
-        if (fp != NULL) {
-            while ((nread = getline(&line, &len, fp)) != -1) {
-                if (strstr(line, "NUM_ASIC") != NULL) {
-                    token = strtok(line, "=");
-                    str_num_asic = strtok(NULL, "=");
-                    strip_trailing_newline(str_num_asic);
-                    if (str_num_asic != NULL){
-                        sscanf(str_num_asic, "%d",&num_asic);
+        // Get Hardware Sku by reading eeprom
+        get_hwsku(platform, hwsku, sizeof(hwsku));
+        if (strlen(hwsku) > 0) {
+            snprintf(asic_file, 512, "/usr/share/sonic/device/%s/%s/asic.conf", platform, hwsku);
+            SYSTEMD_LOG(info,"Get NUM_ASIC from file %s", asic_file);
+            fp = fopen(asic_file, "r");
+            if (fp != NULL) {
+                while ((nread = getline(&line, &len, fp)) != -1) {
+                    if (strstr(line, "NUM_ASIC") != NULL) {
+                        token = strtok(line, "=");
+                        str_num_asic = strtok(NULL, "=");
+                        strip_trailing_newline(str_num_asic);
+                        if (str_num_asic != NULL){
+                            sscanf(str_num_asic, "%d",&num_asic);
+                        }
                     }
-                    break;
+                    else if (strstr(line, "HW_TYPE") != NULL) {
+                        token = strtok(line, "=");
+                        hw_type_ptr= strtok(NULL, "=");
+                        if (hw_type_ptr != NULL) {
+                            strip_trailing_newline(hw_type_ptr);
+                            hw_type= strdup(hw_type_ptr);
+                            if (strcmp((char*)CPM_HW_TYPE, hw_type) == 0) {
+                                SYSTEMD_LOG(info,"HW_TYPE is CPM module");
+                                is_cpm = true;
+                            }
+                        }
+                    }
                 }
+                fclose(fp);   
             }
-            fclose(fp);
-            free(line);
         }
+        /* free the pointer for both getline cases above */
+        free(line);
     }
 
     /*set environment variable NUM_ASIC */
@@ -549,6 +747,10 @@ static int get_num_of_asic() {
         exit(EXIT_FAILURE);
     }
     fprintf(env_fp, "NUM_ASIC=%d\n", num_asic);
+    if (hw_type != NULL) {
+        fprintf(env_fp, "HW_TYPE=%s\n",hw_type);
+        free(hw_type);
+    }
     fclose(env_fp);
     return num_asic;
 
@@ -578,15 +780,29 @@ int main(int argc, char **argv) {
 
     num_unit_files = get_unit_files(unit_files);
 
+    /* The below function must be called after get_unit_files() */
+    get_excluded_services();
+    
     // For each unit file, get the installation targets and install the unit
     for (int i = 0; i < num_unit_files; i++) {
 	unit_instance = strdup(unit_files[i]);
-        if ((num_asics == 1) && strstr(unit_instance, "@") != NULL) {
+        if ((num_asics <= 1) && strstr(unit_instance, "@") != NULL) {
             prefix = strtok(unit_instance, "@");
             suffix = strtok(NULL, "@");
 
             strcpy(unit_instance, prefix);
             strcat(unit_instance, suffix);
+        }
+
+        /* check if service file is in the excluded list.
+         * The excluded list is built only for CPM moudle.
+         * It will be empty if it is not run in the CPM module
+         */
+        if ((is_cpm) && is_excluded_service(unit_instance)) {
+            SYSTEMD_LOG(info, "CPM exclude service file %s", unit_instance);
+            free(unit_instance);
+            free(unit_files[i]);    
+            continue;
         }
 
         num_targets = get_install_targets(unit_instance, targets);
