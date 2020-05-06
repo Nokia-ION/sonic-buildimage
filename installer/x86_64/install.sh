@@ -140,6 +140,14 @@ demo_volume_revision_label="SONiC-${demo_type}-${image_version}"
 # auto-detect whether BIOS or UEFI
 if [ -d "/sys/firmware/efi/efivars" ] ; then
     firmware="uefi"
+    # ensure there is enough NVRAM area available for manipulation...
+    if [ `ls -1 /sys/firmware/efi/efivars/dump-type* 2>/dev/null | wc -l ` -gt 1 ]; then
+       echo "Clearing out EFI FLASH area since dump-type* entries exist!!"
+       rm -f /sys/firmware/efi/efivars/dump-type*
+       echo "rebooting to force EFI coalescing/freeing of resources!!"
+       sleep 5
+       reboot
+    fi  
 else
     firmware="bios"
 fi
@@ -606,7 +614,7 @@ menuentry '$demo_grub_entry' {
         if [ x$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
         insmod part_msdos
         insmod ext2
-        linux   /$image_dir/boot/vmlinuz-4.9.0-11-2-amd64 root=$grub_cfg_root rw $GRUB_CMDLINE_LINUX  \
+        linux   /$image_dir/boot/vmlinuz-4.9.0-11-2-amd64 root=/dev/disk/by-partlabel/SONiC-OS rw $GRUB_CMDLINE_LINUX  \
                 net.ifnames=0 biosdevname=0 \
                 loop=$image_dir/$FILESYSTEM_SQUASHFS loopfstype=squashfs                       \
                 apparmor=1 security=apparmor varlog_size=$VAR_LOG_SIZE usbcore.autosuspend=-1 $ONIE_PLATFORM_EXTRA_CMDLINE_LINUX
