@@ -1,0 +1,5 @@
+ast/scripts/aspeed-ast2700-evb_plt_setup.sh usr/sbin
+ast/scripts/aspeed-ast2700-evb_init.sh  usr/local/bin
+ast/service/aspeed-ast2700-evb_init.service  etc/systemd/system
+ast/service/fstrim.timer/timer-override.conf  /lib/systemd/system/fstrim.timer.d
+ast/sonic_platform-1.0-py3-none-any.whl usr/share/sonic/device/arm64-aspeed-ast2700-evb_ast-r0

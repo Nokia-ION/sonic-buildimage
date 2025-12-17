@@ -1,0 +1,10 @@
+{
+    "chassis": {
+        "ast2700-evb": {
+            "component": {
+                "U-Boot": { },
+                "System-CPLD": { }
+            }
+        }
+    }
+}

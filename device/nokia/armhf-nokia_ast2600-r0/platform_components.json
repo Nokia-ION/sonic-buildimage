@@ -1,0 +1,10 @@
+{
+    "chassis": {
+        "ast2600": {
+            "component": {
+                "U-Boot": { },
+                "System-CPLD": { }
+            }
+        }
+    }
+}

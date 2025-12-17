@@ -1,0 +1,14 @@
+Source: sonic-platform-aspeed
+Section: unknown
+Priority: optional
+Maintainer: Nokia <jon.goldberg@nokia.com>
+Build-Depends: debhelper (>=9)
+Standards-Version: 3.9.6
+Homepage: <insert the upstream URL, if relevant>
+
+Package: sonic-platform-aspeed-ast2700-evb
+Architecture: any
+Depends: ${misc:Depends}
+Description: <insert up to 60 chars description>
+ <insert long description, indented with spaces>
+

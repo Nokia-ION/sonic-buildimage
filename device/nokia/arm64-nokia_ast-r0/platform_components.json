@@ -1,0 +1,10 @@
+{
+    "chassis": {
+        "ast": {
+            "component": {
+                "U-Boot": { },
+                "System-CPLD": { }
+            }
+        }
+    }
+}
