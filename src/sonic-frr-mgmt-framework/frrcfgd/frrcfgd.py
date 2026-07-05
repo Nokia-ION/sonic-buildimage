@@ -15,6 +15,7 @@ import signal
 import re
 import logging
 import netaddr
+import ipaddress
 import io
 import struct
 
@@ -77,7 +78,7 @@ def extract_cmd_daemons(cmd_str):
 class BgpdClientMgr(threading.Thread):
     VTYSH_MARK = 'vtysh '
     PROXY_SERVER_ADDR = '/etc/frr/bgpd_client_sock'
-    ALL_DAEMONS = ['bgpd', 'zebra', 'staticd', 'bfdd', 'ospfd', 'pimd', 'mgmtd']
+    ALL_DAEMONS = ['bgpd', 'zebra', 'staticd', 'bfdd', 'ospfd', 'pimd', 'vrrpd', 'mgmtd']
     TABLE_DAEMON = {
             'DEVICE_METADATA': ['bgpd'],
             'BGP_GLOBALS': ['bgpd'],
@@ -120,6 +121,10 @@ class BgpdClientMgr(threading.Thread):
             'PIM_INTERFACE': ['pimd'],
             'IGMP_INTERFACE': ['pimd'],
             'IGMP_INTERFACE_QUERY': ['pimd'],
+            'VRRP': ['vrrpd'],
+            'VRRP6': ['vrrpd'],
+            'VRRP_TRACK': ['vrrpd'],
+            'VRRP6_TRACK': ['vrrpd'],
             'SRV6_MY_LOCATORS': ['zebra'],
             'SRV6_MY_SOURCE': ['zebra'],
             'SRV6_MY_SIDS': ['mgmtd']
@@ -138,6 +143,7 @@ class BgpdClientMgr(threading.Thread):
                         (r'show ip sla($|\s+\S+)', ['iptrackd']),
                         (r'clear ip sla($|\s+\S+)', ['iptrackd']),
                         (r'clear ip igmp($|\s+\S+)', ['pimd']),
+                        (r'show vrrp($|\s+\S+)', ['vrrpd']),
                         (r'.*', ['bgpd'])]
     @staticmethod
     def __create_proxy_socket():
@@ -2512,6 +2518,10 @@ class BGPConfigDaemon:
             ('BGP_GLOBALS_EVPN_RT', self.bgp_table_handler_common),
             ('BGP_GLOBALS_EVPN_VNI_RT', self.bgp_table_handler_common),
             ('BFD_PEER', self.bfd_handler),
+            ('VRRP', self.vrrp_handler),
+            ('VRRP6', self.vrrp6_handler),
+            ('VRRP_TRACK', self.vrrp_track_handler),
+            ('VRRP6_TRACK', self.vrrp6_track_handler),
             ('NEIGHBOR_SET', self.bgp_table_handler_common),
             ('NEXTHOP_SET', self.bgp_table_handler_common),
             ('TAG_SET', self.bgp_table_handler_common),
@@ -2606,6 +2616,118 @@ class BGPConfigDaemon:
                     command += ['-c', 'no shutdown']
                 elif param == 'admin_status' and data[param] == 'down':
                     command += ['-c', 'shutdown']
+            self.__run_command(table, command)
+
+    def vrrp_handler(self, table, key, data):
+        syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](vrrp) value for {} changed to {}'.format(key, data))
+        key_params = key.split('|')
+        intf_cmd = 'interface {}'.format(key_params[0])
+        cmd = 'vrrp {}'.format(key_params[1])
+        as_list = lambda v: v if isinstance(v, list) else str(v).split(',')
+
+        if not data:
+            command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
+            self.__run_command(table, command)
+            return
+
+        command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd]
+        for param in data:
+            if param == 'vip':
+                for vip in as_list(data[param]):
+                    vip = vip.strip()
+                    if not vip:
+                        continue
+                    ip_addr = ipaddress.ip_interface(vip.split('/')[0])
+                    if ip_addr.version == 4:
+                        command += ['-c', '{} ip {}'.format(cmd, vip.split('/')[0])]
+            elif param == 'priority':
+                command += ['-c', '{} priority {}'.format(cmd, data[param])]
+            elif param == 'adv_interval':
+                command += ['-c', '{} advertisement-interval {}'.format(cmd, int(data[param]) * 1000)]
+            elif param == 'version':
+                command += ['-c', '{} version {}'.format(cmd, data[param])]
+            elif param == 'admin_status' and data[param] == 'down':
+                command += ['-c', '{} shutdown'.format(cmd)]
+            elif param == 'admin_status' and (data[param] == 'up' or data[param] == ''):
+                command += ['-c', 'no {} shutdown'.format(cmd)]
+            elif param == 'preempt':
+                if data[param] == 'enabled':
+                    command += ['-c', '{} preempt'.format(cmd)]
+                elif data[param] == 'disabled':
+                    command += ['-c', 'no {} preempt'.format(cmd)]
+            elif param == 'use_v2_checksum':
+                val = str(data[param]).strip().lower()
+                if val in ('true', 'enabled', 'yes', '1'):
+                    command += ['-c', '{} checksum-with-ipv4-pseudoheader'.format(cmd)]
+                else:
+                    command += ['-c', 'no {} checksum-with-ipv4-pseudoheader'.format(cmd)]
+
+        self.__run_command(table, command)
+
+    def vrrp6_handler(self, table, key, data):
+        syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](vrrp6) value for {} changed to {}'.format(key, data))
+        key_params = key.split('|')
+        intf_cmd = 'interface {}'.format(key_params[0])
+        cmd = 'vrrp6 {}'.format(key_params[1])
+        as_list = lambda v: v if isinstance(v, list) else str(v).split(',')
+
+        if not data:
+            command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
+            self.__run_command(table, command)
+            return
+
+        command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd]
+        for param in data:
+            if param == 'vip':
+                for vip in as_list(data[param]):
+                    vip = vip.strip()
+                    if not vip:
+                        continue
+                    ip_addr = ipaddress.ip_interface(vip.split('/')[0])
+                    if ip_addr.version == 6:
+                        command += ['-c', '{} ipv6 {}'.format(cmd, vip.split('/')[0])]
+            elif param == 'priority':
+                command += ['-c', '{} priority {}'.format(cmd, data[param])]
+            elif param == 'adv_interval':
+                command += ['-c', '{} advertisement-interval {}'.format(cmd, int(data[param]) * 1000)]
+            elif param == 'version':
+                command += ['-c', '{} version {}'.format(cmd, data[param])]
+            elif param == 'admin_status' and data[param] == 'down':
+                command += ['-c', '{} shutdown'.format(cmd)]
+            elif param == 'admin_status' and (data[param] == 'up' or data[param] == ''):
+                command += ['-c', 'no {} shutdown'.format(cmd)]
+            elif param == 'preempt':
+                if data[param] == 'enabled':
+                    command += ['-c', '{} preempt'.format(cmd)]
+                elif data[param] == 'disabled':
+                    command += ['-c', 'no {} preempt'.format(cmd)]
+
+        self.__run_command(table, command)
+
+    def vrrp_track_handler(self, table, key, data):
+        syslog.syslog(syslog.LOG_INFO, '[bgp cfgd](vrrp track) value for {} changed to {}'.format(key, data))
+        key_params = key.split('|')
+        intf_cmd = 'interface {}'.format(key_params[0])
+        cmd = 'vrrp {} track-interface {}'.format(key_params[1], key_params[2])
+
+        if not data:
+            command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
+            self.__run_command(table, command)
+        elif 'priority_increment' in data:
+            command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', '{} priority-dec {}'.format(cmd, data['priority_increment'])]
+            self.__run_command(table, command)
+
+    def vrrp6_track_handler(self, table, key, data):
+        syslog.syslog(syslog.LOG_INFO, '[bgp cfgd](vrrp6 track) value for {} changed to {}'.format(key, data))
+        key_params = key.split('|')
+        intf_cmd = 'interface {}'.format(key_params[0])
+        cmd = 'vrrp6 {} track-interface {}'.format(key_params[1], key_params[2])
+
+        if not data:
+            command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
+            self.__run_command(table, command)
+        elif 'priority_increment' in data:
+            command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', '{} priority-dec {}'.format(cmd, data['priority_increment'])]
             self.__run_command(table, command)
 
     def vrf_handler(self, table, key, data):

@@ -1,0 +1,102 @@
+diff --git a/tests/generic_config_updater/files/patch_sorter_test_success.json b/tests/generic_config_updater/files/patch_sorter_test_success.json
+index a63fc3f4..4ad8a95c 100644
+--- a/tests/generic_config_updater/files/patch_sorter_test_success.json
++++ b/tests/generic_config_updater/files/patch_sorter_test_success.json
+@@ -3851,6 +3851,25 @@
+                     ]
+                 }
+             ],
++            [
++                {
++                    "op": "add",
++                    "path": "/INTERFACE/Ethernet64",
++                    "value": {}
++                }
++            ],
++            [
++                {
++                    "op": "add",
++                    "path": "/INTERFACE/Ethernet64|10.0.0.32~131",
++                    "value": {}
++                },
++                {
++                    "op": "add",
++                    "path": "/INTERFACE/Ethernet64|FC00::41~1126",
++                    "value": {}
++                }
++            ],
+             [
+                 {
+                     "op": "add",
+@@ -3943,25 +3962,6 @@
+                     }
+                 }
+             ],
+-            [
+-                {
+-                    "op": "add",
+-                    "path": "/INTERFACE/Ethernet64",
+-                    "value": {}
+-                }
+-            ],
+-            [
+-                {
+-                    "op": "add",
+-                    "path": "/INTERFACE/Ethernet64|10.0.0.32~131",
+-                    "value": {}
+-                },
+-                {
+-                    "op": "add",
+-                    "path": "/INTERFACE/Ethernet64|FC00::41~1126",
+-                    "value": {}
+-                }
+-            ],
+             [
+                 {
+                     "op": "add",
+@@ -5393,33 +5393,33 @@
+             [
+                 {
+                     "op": "remove",
+-                    "path": "/INTERFACE/Ethernet64|10.0.0.32~131"
+-                },
+-                {
+-                    "op": "remove",
+-                    "path": "/INTERFACE/Ethernet64|FC00::41~1126"
++                    "path": "/DEVICE_NEIGHBOR/Ethernet64"
+                 }
+             ],
+             [
+                 {
+                     "op": "remove",
+-                    "path": "/INTERFACE/Ethernet64"
+-                }
+-            ],
+-            [
++                    "path": "/BGP_NEIGHBOR/10.0.0.33"
++                },
+                 {
+                     "op": "remove",
+-                    "path": "/DEVICE_NEIGHBOR/Ethernet64"
++                    "path": "/BGP_NEIGHBOR/fc00::42"
+                 }
+             ],
+             [
+                 {
+                     "op": "remove",
+-                    "path": "/BGP_NEIGHBOR/10.0.0.33"
++                    "path": "/INTERFACE/Ethernet64|10.0.0.32~131"
+                 },
+                 {
+                     "op": "remove",
+-                    "path": "/BGP_NEIGHBOR/fc00::42"
++                    "path": "/INTERFACE/Ethernet64|FC00::41~1126"
++                }
++            ],
++            [
++                {
++                    "op": "remove",
++                    "path": "/INTERFACE/Ethernet64"
+                 }
+             ],
+             [
