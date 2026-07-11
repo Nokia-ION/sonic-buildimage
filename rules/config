@@ -431,6 +431,9 @@ SONIC_PTF_ENV_PY_VER = py3
 # Add timeout on some process which may hangs
 BUILD_PROCESS_TIMEOUT ?= 0
 
+#INCLUDE STP
+INCLUDE_STP = y
+
 # BUILD_SKIP_TEST - skip all tests when building to reduce build time
 BUILD_SKIP_TEST ?= n
 # SONIC_CONFIG_USE_DOCKER_CACHE - use Docker layer cache for image builds.
