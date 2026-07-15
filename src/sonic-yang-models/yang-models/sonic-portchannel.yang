@@ -22,7 +22,15 @@ module sonic-portchannel {
         prefix vrf;
     }
 
+    import sonic-extension {
+        prefix sonic-ext;
+    }
+
     description "Link Aggregation Group (LAG/PortChannel) configuration using LACP";
+
+    revision 2026-07-09 {
+        description "Add LAG_TABLE and LAG_MEMBER_TABLE operational state containers";
+    }
 
     revision 2025-06-24 {
         description "Add LACP System MAC address";
@@ -62,6 +70,8 @@ module sonic-portchannel {
                 description "Configuration entry for a PortChannel aggregate interface";
 
                 key "name";
+
+                sonic-ext:custom-validation ValidatePortChannelCreationDeletion;
 
                 leaf name {
                     description "PortChannel interface name (e.g. PortChannel0001)";
@@ -263,6 +273,94 @@ module sonic-portchannel {
             } /* end of list PORTCHANNEL_INTERFACE_IPPREFIX_LIST */
 
         } /* end of container PORTCHANNEL_INTERFACE */
+
+        container LAG_TABLE {
+
+            config false;
+
+            description "Operational state of PortChannel (LAG) interfaces";
+
+            list LAG_TABLE_LIST {
+
+                description "Operational state entry for a PortChannel interface";
+
+                key "name";
+
+                leaf name {
+                    description "PortChannel interface name";
+                    type string;
+                }
+
+                leaf admin_status {
+                    description "Administrative status of the PortChannel interface";
+                    type stypes:admin_status;
+                }
+
+                leaf mtu {
+                    description "Maximum transmission unit size in bytes";
+                    type uint16 {
+                        range 1..9216;
+                    }
+                }
+
+                leaf active {
+                    description "Whether the LAG is active";
+                    type boolean;
+                }
+
+                leaf oper_status {
+                    description "Operational status of the PortChannel interface";
+                    type stypes:oper-status;
+                }
+
+                leaf speed {
+                    description "Operational speed of the PortChannel interface in Mbps";
+                    type uint64;
+                }
+
+                leaf traffic_disable {
+                    description "Whether traffic is disabled on the PortChannel (used by MC-LAG)";
+                    type boolean;
+                }
+
+            } /* end of list LAG_TABLE_LIST */
+
+        } /* end of container LAG_TABLE */
+
+        container LAG_MEMBER_TABLE {
+
+            config false;
+
+            description "Operational state of PortChannel member ports";
+
+            list LAG_MEMBER_TABLE_LIST {
+
+                description "Operational state entry for a PortChannel member port";
+
+                key "name port";
+
+                leaf name {
+                    description "Reference to the parent PortChannel interface";
+                    type leafref {
+                        path "/lag:sonic-portchannel/lag:LAG_TABLE/lag:LAG_TABLE_LIST/lag:name";
+                    }
+                }
+
+                leaf port {
+                    description "Reference to the physical port that is a member of this PortChannel";
+                    type leafref {
+                        path /port:sonic-port/port:PORT/port:PORT_LIST/port:name;
+                    }
+                }
+
+                leaf status {
+                    description "Operational status of the PortChannel member port";
+                    type string;
+                }
+
+            } /* end of list LAG_MEMBER_TABLE_LIST */
+
+        } /* end of container LAG_MEMBER_TABLE */
 
     } /* end of container sonic-portchannel */
 
