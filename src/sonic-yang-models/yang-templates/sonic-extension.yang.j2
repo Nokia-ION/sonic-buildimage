@@ -5,6 +5,10 @@ module sonic-extension {
     namespace "http://github.com/sonic-net/sonic-extension";
     prefix sonic-extension;
 
+    organization "SONiC";
+
+    contact "SONiC";
+
     description "Extension yang Module for SONiC OS";
 
     revision 2019-07-01 {
@@ -20,9 +24,30 @@ module sonic-extension {
         argument "value";
     }
 
-    {% if yang_model_type == "cvl" %}
-    extension custom-validation-cvl {
-        description "Extension for registering cvl based custom validation handler.";
+    extension key-delim {
+        description "Key delimeter, e.g. - |, :";
+        argument "value";
+    }
+
+    extension key-pattern {
+        description "Key pattern, e.g. - ACL_RULE|{aclname}|{rulename}";
+        argument "value";
+    }
+
+    extension map-list {
+        description "If it is a map list";
+        argument "value";
+    }
+
+    extension map-leaf {
+        description "Map leaf names";
+        argument "value";
+    }
+
+    extension custom-validation {
+        description
+            "Extension for custom validation.
+             Platform specific validation can be implemented using custom validation.";
         argument "handler";
     }
 
@@ -36,6 +61,11 @@ module sonic-extension {
             as modeled in yang.  e.g. - dependent-on stp-list";
         argument "value";
     }
-    {% else %}
+
+    {% if yang_model_type == "cvl" %}
+    extension custom-validation-cvl {
+        description "Extension for registering cvl based custom validation handler.";
+        argument "handler";
+    }
     {% endif %}
 }
