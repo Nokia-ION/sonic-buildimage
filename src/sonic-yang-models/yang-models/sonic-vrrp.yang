@@ -112,6 +112,18 @@ module sonic-vrrp {
                     default 1;
                 }
 
+                leaf accept_mode {
+                    type stypes:boolean_type;
+                    default false;
+                }
+
+                leaf preempt_delay {
+                    type uint16 {
+                        range "0..3600";
+                    }
+                    default 0;
+                }
+
                 leaf-list vip {
                     max-elements 4;
                     type inet:ipv4-address;
@@ -221,6 +233,22 @@ module sonic-vrrp {
                         range "1..254";
                     }
                     default 1;
+                }
+
+                leaf accept_mode {
+                    type stypes:boolean_type;
+                    default false;
+                }
+
+                leaf preempt_delay {
+                    type uint16 {
+                        range "0..3600";
+                    }
+                    default 0;
+                }
+
+                leaf virtual_link_local {
+                    type inet:ipv6-address;
                 }
 
                 leaf-list vip {
