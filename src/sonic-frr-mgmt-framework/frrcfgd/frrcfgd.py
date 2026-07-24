@@ -2624,6 +2624,7 @@ class BGPConfigDaemon:
         intf_cmd = 'interface {}'.format(key_params[0])
         cmd = 'vrrp {}'.format(key_params[1])
         as_list = lambda v: v if isinstance(v, list) else str(v).split(',')
+        deferred_params = {'accept_mode', 'virtual_link_local'}
 
         if not data:
             command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
@@ -2661,6 +2662,13 @@ class BGPConfigDaemon:
                     command += ['-c', '{} checksum-with-ipv4-pseudoheader'.format(cmd)]
                 else:
                     command += ['-c', 'no {} checksum-with-ipv4-pseudoheader'.format(cmd)]
+            elif param in deferred_params:
+                syslog.syslog(
+                    syslog.LOG_WARNING,
+                    '[vrrp cfgd](vrrp) deferred field {} for {}: persisted in CONFIG_DB but not programmed to FRR'.format(
+                        param, key
+                    ),
+                )
 
         self.__run_command(table, command)
 
@@ -2670,6 +2678,7 @@ class BGPConfigDaemon:
         intf_cmd = 'interface {}'.format(key_params[0])
         cmd = 'vrrp6 {}'.format(key_params[1])
         as_list = lambda v: v if isinstance(v, list) else str(v).split(',')
+        deferred_params = {'accept_mode', 'virtual_link_local'}
 
         if not data:
             command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
@@ -2701,6 +2710,13 @@ class BGPConfigDaemon:
                     command += ['-c', '{} preempt'.format(cmd)]
                 elif data[param] == 'disabled':
                     command += ['-c', 'no {} preempt'.format(cmd)]
+            elif param in deferred_params:
+                syslog.syslog(
+                    syslog.LOG_WARNING,
+                    '[vrrp cfgd](vrrp6) deferred field {} for {}: persisted in CONFIG_DB but not programmed to FRR'.format(
+                        param, key
+                    ),
+                )
 
         self.__run_command(table, command)
 
