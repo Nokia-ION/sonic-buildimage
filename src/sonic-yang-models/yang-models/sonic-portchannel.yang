@@ -28,6 +28,10 @@ module sonic-portchannel {
 
     description "Link Aggregation Group (LAG/PortChannel) configuration using LACP";
 
+    revision 2026-07-29 {
+        description "Add LACP active/passive mode configuration on PORTCHANNEL";
+    }
+
     revision 2026-07-09 {
         description "Add LAG_TABLE and LAG_MEMBER_TABLE operational state containers";
     }
@@ -141,6 +145,14 @@ module sonic-portchannel {
                 }
                 leaf fast_rate {
                     description "Enable LACP fast rate";
+                    type stypes:boolean_type;
+                }
+
+                leaf active {
+                    description
+                        "LACP activity mode for the aggregate interface. When true, the
+                         local system transmits LACP PDUs (active mode). When false, the
+                         local system waits for the peer to initiate LACP (passive mode).";
                     type stypes:boolean_type;
                 }
 

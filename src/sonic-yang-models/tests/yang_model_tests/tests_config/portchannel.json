@@ -29,6 +29,7 @@
                         "name": "PortChannel0001",
                         "fast_rate": "false",
                         "fallback" : "false",
+                        "active": "true",
                         "mode" :  "routed"
                     }
                 ]
@@ -166,6 +167,21 @@
                         "tpid": "0x9100",
                         "name": "PortChannel0001",
                         "fast_rate": "TRUE"
+                    }
+                ]
+            }
+        }
+    },
+    "PORT_CHANNEL_INVALID_ACTIVE": {
+        "sonic-portchannel:sonic-portchannel": {
+            "sonic-portchannel:PORTCHANNEL": {
+                "PORTCHANNEL_LIST": [
+                    {
+                        "admin_status": "up",
+                        "mtu": "9100",
+                        "tpid": "0x9100",
+                        "name": "PortChannel0001",
+                        "active": "enabled"
                     }
                 ]
             }
