@@ -30,5 +30,17 @@
 				]
 			}
 		}
+	},
+	"MST_GLOBAL_VALID": {
+		"sonic-spanning-tree:sonic-spanning-tree": {
+			"sonic-spanning-tree:STP": {
+				"STP_LIST": [
+					{
+						"keyleaf": "GLOBAL",
+						"mode": "mst"
+					}
+				]
+			}
+		}
 	}
 }
