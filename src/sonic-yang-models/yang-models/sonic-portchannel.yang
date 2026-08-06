@@ -28,6 +28,10 @@ module sonic-portchannel {
 
     description "Link Aggregation Group (LAG/PortChannel) configuration using LACP";
 
+    revision 2026-08-03 {
+        description "Add LACP fallback_timeout configuration on PORTCHANNEL";
+    }
+
     revision 2026-07-29 {
         description "Add LACP active/passive mode configuration on PORTCHANNEL";
     }
@@ -143,6 +147,20 @@ module sonic-portchannel {
                     description "Enable LACP fallback feature";
                     type stypes:boolean_type;
                 }
+
+                leaf fallback_timeout {
+                    description "Number of seconds to wait for LACP PDUs from the peer before
+                                 falling back to a single active member port. Only applicable
+                                 when fallback is enabled; defaults to 90 seconds when unset.";
+                    must "../fallback = 'true' or ../fallback = 'True'" {
+                        error-message "fallback_timeout requires fallback to be enabled.";
+                        error-app-tag fallback-timeout-requires-fallback;
+                    }
+                    type uint16 {
+                        range 1..65535;
+                    }
+                }
+
                 leaf fast_rate {
                     description "Enable LACP fast rate";
                     type stypes:boolean_type;
