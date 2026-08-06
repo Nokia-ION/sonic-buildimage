@@ -2,5 +2,9 @@
     "PVST_GLOBAL_VALID": {
         "desc": "Configure valid global PVST settings",
         "eStr": []
+    },
+    "MST_GLOBAL_VALID": {
+        "desc": "Configure valid global MST settings without PVST-only leaves",
+        "eStr": []
     }
 }
