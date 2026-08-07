@@ -37,6 +37,12 @@ endif
 $(DOCKER_GNMI)_CONTAINER_NAME = gnmi
 $(DOCKER_GNMI)_RUN_OPT += -t
 $(DOCKER_GNMI)_RUN_OPT += -v /etc/sonic:/etc/sonic:ro
+# gNSI Certz hitless rotation and the advancedtls per-connection cert reload
+# (SrvAdvConfig) must be able to bootstrap/flip the *.lnk symlinks, write the
+# rotated cert/key files and persist profile metadata (grpc-version.json) in the
+# telemetry cert directory. Mount it read-write to override the read-only
+# /etc/sonic bind above.
+$(DOCKER_GNMI)_RUN_OPT += -v /etc/sonic/telemetry:/etc/sonic/telemetry:rw
 $(DOCKER_GNMI)_RUN_OPT += -v /etc/localtime:/etc/localtime:ro
 ifneq ($(strip $(GNMI_REDIS_POOL_SIZE)),)
 $(DOCKER_GNMI)_RUN_OPT += -e GNMI_REDIS_POOL_SIZE=$(GNMI_REDIS_POOL_SIZE)
