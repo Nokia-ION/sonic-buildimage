@@ -203,5 +203,14 @@ if [ -n "$USER_AUTH" ] && [ "$USER_AUTH" != "null" ]; then
     fi
 fi
 
+# gNOI OS Install streams the image into --img_dir before the host-side
+# sonic-host-service installs it with sonic-installer. That directory must be
+# visible to BOTH the container and the host, so use the /var/tmp bind mount
+# (/var/tmp:/mnt/host/var/tmp:rw in rules/docker-gnmi.mk): the container writes
+# /mnt/host/var/tmp/<version>, which the host sees as /var/tmp/<version>
+# (see GNOI_OS_HOST_IMG_DIR in host_modules/image_service.py). The default
+# --img_dir (/tmp/host_tmp) is container-local and NOT reachable by the host.
+TELEMETRY_ARGS+=" --img_dir /mnt/host/var/tmp"
+
 echo "gnmi args: $TELEMETRY_ARGS"
 exec /usr/sbin/telemetry ${TELEMETRY_ARGS}
