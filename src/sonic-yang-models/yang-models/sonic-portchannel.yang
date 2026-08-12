@@ -150,10 +150,12 @@ module sonic-portchannel {
 
                 leaf fallback_timeout {
                     description "Number of seconds to wait for LACP PDUs from the peer before
-                                 falling back to a single active member port. Only applicable
-                                 when fallback is enabled; defaults to 90 seconds when unset.";
-                    must "../fallback = 'true' or ../fallback = 'True'" {
-                        error-message "fallback_timeout requires fallback to be enabled.";
+                                 falling back to a single active member port. The value may remain
+                                 configured while fallback is disabled so it can be restored when
+                                 fallback is re-enabled; defaults to 90 seconds when unset.";
+                    must "../fallback = 'true' or ../fallback = 'True' or "
+                       + "../fallback = 'false' or ../fallback = 'False'" {
+                        error-message "fallback_timeout requires fallback to be configured.";
                         error-app-tag fallback-timeout-requires-fallback;
                     }
                     type uint16 {
