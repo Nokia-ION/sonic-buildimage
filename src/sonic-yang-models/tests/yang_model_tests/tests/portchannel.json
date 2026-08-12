@@ -119,12 +119,15 @@
     "PORT_CHANNEL_VALID_FALLBACK_TIMEOUT": {
         "desc": "Configure PortChannel with fallback enabled and a valid fallback_timeout."
     },
+    "PORT_CHANNEL_FALLBACK_TIMEOUT_WHILE_DISABLED": {
+        "desc": "Configure PortChannel with fallback disabled but fallback_timeout retained."
+    },
     "PORT_CHANNEL_OUT_OF_RANGE_FALLBACK_TIMEOUT": {
         "desc": "Configure PortChannel with an out of range fallback_timeout.",
         "eStrKey": "Range"
     },
     "PORT_CHANNEL_FALLBACK_TIMEOUT_WITHOUT_FALLBACK": {
-        "desc": "Configure fallback_timeout without enabling fallback.",
-        "eStr": "fallback_timeout requires fallback to be enabled."
+        "desc": "Configure fallback_timeout without configuring fallback.",
+        "eStr": "fallback_timeout requires fallback to be configured."
     }
 }

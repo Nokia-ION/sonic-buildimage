@@ -807,6 +807,22 @@
             }
         }
     },
+    "PORT_CHANNEL_FALLBACK_TIMEOUT_WHILE_DISABLED": {
+        "sonic-portchannel:sonic-portchannel": {
+            "sonic-portchannel:PORTCHANNEL": {
+                "PORTCHANNEL_LIST": [
+                    {
+                        "admin_status": "up",
+                        "mtu": "9100",
+                        "name": "PortChannel0001",
+                        "mode": "routed",
+                        "fallback": "false",
+                        "fallback_timeout": 10
+                    }
+                ]
+            }
+        }
+    },
     "PORT_CHANNEL_OUT_OF_RANGE_FALLBACK_TIMEOUT": {
         "sonic-portchannel:sonic-portchannel": {
             "sonic-portchannel:PORTCHANNEL": {
