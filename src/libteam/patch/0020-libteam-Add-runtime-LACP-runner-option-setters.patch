@@ -1,0 +1,381 @@
+Add runtime setters for LACP runner options
+
+Allow teamdctl state item set for runner.min_ports, runner.fallback,
+runner.fallback_timeout, runner.fast_rate and runner.active so SONiC can
+change these parameters (including lacp-mode) without recreating the LAG.
+Each setter updates lacp->cfg and re-evaluates carrier/selection, timers,
+or advertises the new LACP actor state as needed.
+diff --git a/teamd/teamd_runner_lacp.c b/teamd/teamd_runner_lacp.c
+index 092d83f..d6dc6e8 100644
+--- a/teamd/teamd_runner_lacp.c
++++ b/teamd/teamd_runner_lacp.c
+@@ -2178,6 +2178,62 @@ static int lacp_state_active_get(struct teamd_context *ctx,
+ 	return 0;
+ }
+ 
++struct lacp_state_active_info {
++	struct teamd_workq workq;
++	struct lacp *lacp;
++	bool active;
++};
++
++static int lacp_state_active_work(struct teamd_context *ctx,
++				  struct teamd_workq *workq)
++{
++	struct lacp_state_active_info *info;
++	struct lacp *lacp;
++	struct teamd_port *tdport;
++	int err = 0;
++
++	info = get_container(workq, struct lacp_state_active_info, workq);
++	lacp = info->lacp;
++	if (info->active == lacp->cfg.active)
++		goto out;
++
++	teamd_log_dbg(ctx, "active manually changed from %d to %d",
++		      lacp->cfg.active, info->active);
++	lacp->cfg.active = info->active;
++
++	teamd_for_each_tdport(tdport, lacp->ctx) {
++		struct lacp_port *lacp_port = lacp_port_get(lacp, tdport);
++
++		lacp_port_actor_update(lacp_port);
++		lacp_port_periodic_cb_change_enabled(lacp_port);
++		if (lacp_port_selected(lacp_port)) {
++			err = lacpdu_send(lacp_port);
++			if (err)
++				goto out;
++		}
++	}
++out:
++	free(info);
++	return err;
++}
++
++static int lacp_state_active_set(struct teamd_context *ctx,
++				 struct team_state_gsc *gsc,
++				 void *priv)
++{
++	struct lacp_state_active_info *info;
++	struct lacp *lacp = priv;
++
++	info = malloc(sizeof(*info));
++	if (!info)
++		return -ENOMEM;
++	teamd_workq_init_work(&info->workq, lacp_state_active_work);
++	info->lacp = lacp;
++	info->active = gsc->data.bool_val;
++	teamd_workq_schedule_work(ctx, &info->workq);
++	return 0;
++}
++
+ static int lacp_state_sys_prio_get(struct teamd_context *ctx,
+ 				   struct team_state_gsc *gsc,
+ 				   void *priv)
+@@ -2198,6 +2254,64 @@ static int lacp_state_fast_rate_get(struct teamd_context *ctx,
+ 	return 0;
+ }
+ 
++struct lacp_state_fast_rate_info {
++	struct teamd_workq workq;
++	struct lacp *lacp;
++	bool fast_rate;
++};
++
++static int lacp_state_fast_rate_work(struct teamd_context *ctx,
++				     struct teamd_workq *workq)
++{
++	struct lacp_state_fast_rate_info *info;
++	struct lacp *lacp;
++	struct teamd_port *tdport;
++	int err = 0;
++
++	info = get_container(workq, struct lacp_state_fast_rate_info, workq);
++	lacp = info->lacp;
++	if (info->fast_rate == lacp->cfg.fast_rate)
++		goto out;
++
++	teamd_log_dbg(ctx, "fast_rate manually changed from %d to %d",
++		      lacp->cfg.fast_rate, info->fast_rate);
++	lacp->cfg.fast_rate = info->fast_rate;
++
++	teamd_for_each_tdport(tdport, lacp->ctx) {
++		struct lacp_port *lacp_port = lacp_port_get(lacp, tdport);
++
++		lacp_port_actor_update(lacp_port);
++		err = lacp_port_timeout_set(lacp_port, false);
++		if (err)
++			goto out;
++		if (lacp_port_selected(lacp_port)) {
++			err = lacpdu_send(lacp_port);
++			if (err)
++				goto out;
++		}
++	}
++out:
++	free(info);
++	return err;
++}
++
++static int lacp_state_fast_rate_set(struct teamd_context *ctx,
++				    struct team_state_gsc *gsc,
++				    void *priv)
++{
++	struct lacp_state_fast_rate_info *info;
++	struct lacp *lacp = priv;
++
++	info = malloc(sizeof(*info));
++	if (!info)
++		return -ENOMEM;
++	teamd_workq_init_work(&info->workq, lacp_state_fast_rate_work);
++	info->lacp = lacp;
++	info->fast_rate = gsc->data.bool_val;
++	teamd_workq_schedule_work(ctx, &info->workq);
++	return 0;
++}
++
+ static int lacp_state_fallback_get(struct teamd_context *ctx,
+ 				   struct team_state_gsc *gsc,
+ 				   void *priv)
+@@ -2208,6 +2322,77 @@ static int lacp_state_fallback_get(struct teamd_context *ctx,
+ 	return 0;
+ }
+ 
++struct lacp_state_fallback_info {
++	struct teamd_workq workq;
++	struct lacp *lacp;
++	bool fallback;
++};
++
++static int lacp_state_fallback_work(struct teamd_context *ctx,
++				    struct teamd_workq *workq)
++{
++	struct lacp_state_fallback_info *info;
++	struct lacp *lacp;
++	struct teamd_port *tdport;
++	int err = 0;
++
++	info = get_container(workq, struct lacp_state_fallback_info, workq);
++	lacp = info->lacp;
++	if (info->fallback == lacp->cfg.fallback)
++		goto out;
++
++	teamd_log_dbg(ctx, "fallback manually changed from %d to %d",
++		      lacp->cfg.fallback, info->fallback);
++	lacp->cfg.fallback = info->fallback;
++
++	teamd_for_each_tdport(tdport, lacp->ctx) {
++		struct lacp_port *lacp_port = lacp_port_get(lacp, tdport);
++
++		if (lacp_port_get_state(lacp_port) != PORT_STATE_DEFAULTED)
++			continue;
++
++		if (lacp->cfg.fallback) {
++			if (!lacp_port->fallback_timeout_expired) {
++				err = lacp_port_fallback_timeout_set(lacp_port);
++				if (err)
++					goto out;
++				teamd_loop_callback_enable(ctx,
++							   LACP_FALLBACK_TIMEOUT_CB_NAME,
++							   lacp_port);
++			}
++		} else {
++			lacp_port->fallback_timeout_expired = false;
++			teamd_loop_callback_disable(ctx,
++						    LACP_FALLBACK_TIMEOUT_CB_NAME,
++						    lacp_port);
++		}
++
++		err = lacp_port_agg_update(lacp_port);
++		if (err)
++			goto out;
++	}
++out:
++	free(info);
++	return err;
++}
++
++static int lacp_state_fallback_set(struct teamd_context *ctx,
++				   struct team_state_gsc *gsc,
++				   void *priv)
++{
++	struct lacp_state_fallback_info *info;
++	struct lacp *lacp = priv;
++
++	info = malloc(sizeof(*info));
++	if (!info)
++		return -ENOMEM;
++	teamd_workq_init_work(&info->workq, lacp_state_fallback_work);
++	info->lacp = lacp;
++	info->fallback = gsc->data.bool_val;
++	teamd_workq_schedule_work(ctx, &info->workq);
++	return 0;
++}
++
+ static int lacp_state_fallback_timeout_get(struct teamd_context *ctx,
+ 					   struct team_state_gsc *gsc,
+ 					   void *priv)
+@@ -2218,6 +2403,129 @@ static int lacp_state_fallback_timeout_get(struct teamd_context *ctx,
+ 	return 0;
+ }
+ 
++struct lacp_state_fallback_timeout_info {
++	struct teamd_workq workq;
++	struct lacp *lacp;
++	uint16_t fallback_timeout;
++};
++
++static int lacp_state_fallback_timeout_work(struct teamd_context *ctx,
++					    struct teamd_workq *workq)
++{
++	struct lacp_state_fallback_timeout_info *info;
++	struct lacp *lacp;
++	struct teamd_port *tdport;
++	int err = 0;
++
++	info = get_container(workq, struct lacp_state_fallback_timeout_info,
++			     workq);
++	lacp = info->lacp;
++	if (info->fallback_timeout == lacp->cfg.fallback_timeout)
++		goto out;
++
++	teamd_log_dbg(ctx, "fallback_timeout manually changed from %u to %u",
++		      lacp->cfg.fallback_timeout, info->fallback_timeout);
++	lacp->cfg.fallback_timeout = info->fallback_timeout;
++
++	if (!lacp->cfg.fallback)
++		goto out;
++
++	teamd_for_each_tdport(tdport, lacp->ctx) {
++		struct lacp_port *lacp_port = lacp_port_get(lacp, tdport);
++
++		if (lacp_port_get_state(lacp_port) != PORT_STATE_DEFAULTED ||
++		    lacp_port->fallback_timeout_expired)
++			continue;
++
++		err = lacp_port_fallback_timeout_set(lacp_port);
++		if (err)
++			goto out;
++		teamd_loop_callback_enable(ctx, LACP_FALLBACK_TIMEOUT_CB_NAME,
++					   lacp_port);
++	}
++out:
++	free(info);
++	return err;
++}
++
++static int lacp_state_fallback_timeout_set(struct teamd_context *ctx,
++					   struct team_state_gsc *gsc,
++					   void *priv)
++{
++	struct lacp_state_fallback_timeout_info *info;
++	struct lacp *lacp = priv;
++
++	if (gsc->data.int_val < 1 || gsc->data.int_val > USHRT_MAX)
++		return -EINVAL;
++
++	info = malloc(sizeof(*info));
++	if (!info)
++		return -ENOMEM;
++	teamd_workq_init_work(&info->workq, lacp_state_fallback_timeout_work);
++	info->lacp = lacp;
++	info->fallback_timeout = gsc->data.int_val;
++	teamd_workq_schedule_work(ctx, &info->workq);
++	return 0;
++}
++
++static int lacp_state_min_ports_get(struct teamd_context *ctx,
++				    struct team_state_gsc *gsc,
++				    void *priv)
++{
++	struct lacp *lacp = priv;
++
++	gsc->data.int_val = lacp->cfg.min_ports;
++	return 0;
++}
++
++struct lacp_state_min_ports_info {
++	struct teamd_workq workq;
++	struct lacp *lacp;
++	int min_ports;
++};
++
++static int lacp_state_min_ports_work(struct teamd_context *ctx,
++				     struct teamd_workq *workq)
++{
++	struct lacp_state_min_ports_info *info;
++	struct lacp *lacp;
++	int err = 0;
++
++	info = get_container(workq, struct lacp_state_min_ports_info, workq);
++	lacp = info->lacp;
++	if (info->min_ports == lacp->cfg.min_ports)
++		goto out;
++
++	teamd_log_dbg(ctx, "min_ports manually changed from %d to %d",
++		      lacp->cfg.min_ports, info->min_ports);
++	lacp->cfg.min_ports = info->min_ports;
++	err = lacp_update_carrier(lacp);
++out:
++	free(info);
++	return err;
++}
++
++static int lacp_state_min_ports_set(struct teamd_context *ctx,
++				    struct team_state_gsc *gsc,
++				    void *priv)
++{
++	struct lacp_state_min_ports_info *info;
++	struct lacp *lacp = priv;
++
++	if (gsc->data.int_val < 1 ||
++	    gsc->data.int_val > LACP_CFG_DFLT_MIN_PORTS_MAX)
++		return -EINVAL;
++
++	info = malloc(sizeof(*info));
++	if (!info)
++		return -ENOMEM;
++	teamd_workq_init_work(&info->workq, lacp_state_min_ports_work);
++	info->lacp = lacp;
++	info->min_ports = gsc->data.int_val;
++	teamd_workq_schedule_work(ctx, &info->workq);
++	return 0;
++}
++
+ static int lacp_state_select_policy_get(struct teamd_context *ctx,
+ 					struct team_state_gsc *gsc,
+ 					void *priv)
+@@ -2393,6 +2701,7 @@ static const struct teamd_state_val lacp_state_vals[] = {
+ 		.subpath = "active",
+ 		.type = TEAMD_STATE_ITEM_TYPE_BOOL,
+ 		.getter = lacp_state_active_get,
++		.setter = lacp_state_active_set,
+ 	},
+ 	{
+ 		.subpath = "sys_prio",
+@@ -2403,16 +2712,25 @@ static const struct teamd_state_val lacp_state_vals[] = {
+ 		.subpath = "fast_rate",
+ 		.type = TEAMD_STATE_ITEM_TYPE_BOOL,
+ 		.getter = lacp_state_fast_rate_get,
++		.setter = lacp_state_fast_rate_set,
+ 	},
+ 	{
+ 		.subpath = "fallback",
+ 		.type = TEAMD_STATE_ITEM_TYPE_BOOL,
+ 		.getter = lacp_state_fallback_get,
++		.setter = lacp_state_fallback_set,
+ 	},
+ 	{
+ 		.subpath = "fallback_timeout",
+ 		.type = TEAMD_STATE_ITEM_TYPE_INT,
+ 		.getter = lacp_state_fallback_timeout_get,
++		.setter = lacp_state_fallback_timeout_set,
++	},
++	{
++		.subpath = "min_ports",
++		.type = TEAMD_STATE_ITEM_TYPE_INT,
++		.getter = lacp_state_min_ports_get,
++		.setter = lacp_state_min_ports_set,
+ 	},
+ 	{
+ 		.subpath = "select_policy",
