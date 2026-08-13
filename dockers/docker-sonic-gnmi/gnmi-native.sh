@@ -119,6 +119,17 @@ esac
 
 TELEMETRY_ARGS+=" --port $PORT"
 
+# DSCP marking for served gNMI/gNOI/gNSI (observer) traffic: model-driven
+# equivalent of the vendor "qos dscp" knob. Sourced from CONFIG_DB GNMI|gnmi:dscp
+# (programmable via the OpenConfig grpc-server config). Default to 32 (AF41)
+# when unset/invalid, matching the server's built-in default.
+DSCP=$(extract_field "$GNMI" '.dscp')
+if [[ $DSCP =~ ^[0-9]+$ ]] && [ "$DSCP" -ge 0 ] && [ "$DSCP" -le 63 ]; then
+    TELEMETRY_ARGS+=" --dscp $DSCP"
+else
+    TELEMETRY_ARGS+=" --dscp 32"
+fi
+
 CLIENT_AUTH=$(extract_field "$GNMI" '.client_auth')
 if [[ "$DPU_EPHEMERAL_TLS" == "true" || "$CLIENT_AUTH" == "false" ]]; then
     TELEMETRY_ARGS+=" --allow_no_client_auth"
