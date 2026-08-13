@@ -87,6 +87,14 @@ module sonic-gnmi {
                     description "Port gnmi runs on.";
                 }
 
+                leaf dscp {
+                    type uint8 {
+                        range 0..63;
+                    }
+                    default 32;
+                    description "DSCP (0..63) applied to the gRPC (gNMI/gNOI/gNSI) traffic served by the gNMI server. Equivalent of the vendor 'qos dscp' knob; the server derives the IP ToS / IPv6 Traffic-Class byte from it. Default 32 (AF41).";
+                }
+
                 leaf save_on_set {
                     type boolean;
                     description "Flag for enabling save on set.";
