@@ -144,6 +144,7 @@ class BgpdClientMgr(threading.Thread):
                         (r'clear ip sla($|\s+\S+)', ['iptrackd']),
                         (r'clear ip igmp($|\s+\S+)', ['pimd']),
                         (r'show vrrp($|\s+\S+)', ['vrrpd']),
+                        (r'show vrrp6($|\s+\S+)', ['vrrpd']),
                         (r'.*', ['bgpd'])]
     @staticmethod
     def __create_proxy_socket():
