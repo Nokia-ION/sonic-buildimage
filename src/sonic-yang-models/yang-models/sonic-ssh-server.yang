@@ -69,6 +69,12 @@ module sonic-ssh-server {
                         range 0..100;
                     }
                 }
+                leaf dscp {
+                    description "DSCP value used to mark SSH management-plane (control) traffic. Rendered into sshd_config as IPQoS.";
+                    type uint32 {
+                        range 0..63;
+                    }
+                }
                 leaf permit_root_login {
                     description "Specifies whether root can log in using ssh.";
                     type enumeration {
