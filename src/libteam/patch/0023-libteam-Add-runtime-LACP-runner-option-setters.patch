@@ -1,15 +1,26 @@
-Add runtime setters for LACP runner options
+From a26ad9cb5a621c30131af132a1836b9f8d3581bc Mon Sep 17 00:00:00 2001
+From: varunama <varuna.m@nokia.com>
+Date: Tue, 25 Aug 2026 18:32:50 +0530
+Subject: [PATCH] Add runtime setters for LACP runner options
 
 Allow teamdctl state item set for runner.min_ports, runner.fallback,
 runner.fallback_timeout, runner.fast_rate and runner.active so SONiC can
 change these parameters (including lacp-mode) without recreating the LAG.
 Each setter updates lacp->cfg and re-evaluates carrier/selection, timers,
 or advertises the new LACP actor state as needed.
+
+Fallback enable/disable and timeout changes drive PORT_STATE_FALLBACK
+election: only one defaulted member that has waited out fallback_timeout
+is selected, and disabling fallback clears an existing fallback member.
+---
+ teamd/teamd_runner_lacp.c | 319 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 319 insertions(+)
+
 diff --git a/teamd/teamd_runner_lacp.c b/teamd/teamd_runner_lacp.c
-index 092d83f..d6dc6e8 100644
+index 93bb82d..241a782 100644
 --- a/teamd/teamd_runner_lacp.c
 +++ b/teamd/teamd_runner_lacp.c
-@@ -2178,6 +2178,62 @@ static int lacp_state_active_get(struct teamd_context *ctx,
+@@ -2283,6 +2283,62 @@ static int lacp_state_active_get(struct teamd_context *ctx,
  	return 0;
  }
  
@@ -72,7 +83,7 @@ index 092d83f..d6dc6e8 100644
  static int lacp_state_sys_prio_get(struct teamd_context *ctx,
  				   struct team_state_gsc *gsc,
  				   void *priv)
-@@ -2198,6 +2254,64 @@ static int lacp_state_fast_rate_get(struct teamd_context *ctx,
+@@ -2303,6 +2359,64 @@ static int lacp_state_fast_rate_get(struct teamd_context *ctx,
  	return 0;
  }
  
@@ -137,7 +148,7 @@ index 092d83f..d6dc6e8 100644
  static int lacp_state_fallback_get(struct teamd_context *ctx,
  				   struct team_state_gsc *gsc,
  				   void *priv)
-@@ -2208,6 +2322,77 @@ static int lacp_state_fallback_get(struct teamd_context *ctx,
+@@ -2313,6 +2427,78 @@ static int lacp_state_fallback_get(struct teamd_context *ctx,
  	return 0;
  }
  
@@ -166,12 +177,15 @@ index 092d83f..d6dc6e8 100644
 +
 +	teamd_for_each_tdport(tdport, lacp->ctx) {
 +		struct lacp_port *lacp_port = lacp_port_get(lacp, tdport);
++		enum lacp_port_state state = lacp_port_get_state(lacp_port);
 +
-+		if (lacp_port_get_state(lacp_port) != PORT_STATE_DEFAULTED)
++		if (state != PORT_STATE_DEFAULTED &&
++		    state != PORT_STATE_FALLBACK)
 +			continue;
 +
 +		if (lacp->cfg.fallback) {
-+			if (!lacp_port->fallback_timeout_expired) {
++			if (state == PORT_STATE_DEFAULTED &&
++			    !lacp_port->fallback_timeout_expired) {
 +				err = lacp_port_fallback_timeout_set(lacp_port);
 +				if (err)
 +					goto out;
@@ -185,11 +199,9 @@ index 092d83f..d6dc6e8 100644
 +						    LACP_FALLBACK_TIMEOUT_CB_NAME,
 +						    lacp_port);
 +		}
-+
-+		err = lacp_port_agg_update(lacp_port);
-+		if (err)
-+			goto out;
 +	}
++
++	err = lacp_ports_update_fallback_state(lacp);
 +out:
 +	free(info);
 +	return err;
@@ -215,7 +227,7 @@ index 092d83f..d6dc6e8 100644
  static int lacp_state_fallback_timeout_get(struct teamd_context *ctx,
  					   struct team_state_gsc *gsc,
  					   void *priv)
-@@ -2218,6 +2403,129 @@ static int lacp_state_fallback_timeout_get(struct teamd_context *ctx,
+@@ -2323,6 +2509,129 @@ static int lacp_state_fallback_timeout_get(struct teamd_context *ctx,
  	return 0;
  }
  
@@ -345,7 +357,7 @@ index 092d83f..d6dc6e8 100644
  static int lacp_state_select_policy_get(struct teamd_context *ctx,
  					struct team_state_gsc *gsc,
  					void *priv)
-@@ -2393,6 +2701,7 @@ static const struct teamd_state_val lacp_state_vals[] = {
+@@ -2498,6 +2807,7 @@ static const struct teamd_state_val lacp_state_vals[] = {
  		.subpath = "active",
  		.type = TEAMD_STATE_ITEM_TYPE_BOOL,
  		.getter = lacp_state_active_get,
@@ -353,7 +365,7 @@ index 092d83f..d6dc6e8 100644
  	},
  	{
  		.subpath = "sys_prio",
-@@ -2403,16 +2712,25 @@ static const struct teamd_state_val lacp_state_vals[] = {
+@@ -2508,16 +2818,25 @@ static const struct teamd_state_val lacp_state_vals[] = {
  		.subpath = "fast_rate",
  		.type = TEAMD_STATE_ITEM_TYPE_BOOL,
  		.getter = lacp_state_fast_rate_get,
@@ -379,3 +391,6 @@ index 092d83f..d6dc6e8 100644
  	},
  	{
  		.subpath = "select_policy",
+-- 
+2.43.0
+
