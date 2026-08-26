@@ -209,7 +209,12 @@ stderr_syslog=true
 dependent_startup=true
 dependent_startup_wait_for=bgpd:running
 {% endif %}
+{% endif %}
 
+{# bgpmon only reads FRR over vtysh and publishes neighbor state to STATE_DB,
+   so unlike staticroutebfd it cannot contend with frrcfgd for FRR config
+   ownership. It is therefore required in both config modes: the OpenConfig
+   BGP neighbor state paths are served from the NEIGH_STATE_TABLE it writes. #}
 [program:bgpmon]
 command=/usr/local/bin/bgpmon
 priority={{ _pbase + 2 }}
@@ -223,7 +228,6 @@ stderr_syslog=true
 {% if _dep %}
 dependent_startup=true
 dependent_startup_wait_for=bgpd:running
-{% endif %}
 {% endif %}
 
 {% if SYSTEM_DEFAULTS is defined and SYSTEM_DEFAULTS.software_bfd is defined and SYSTEM_DEFAULTS.software_bfd.status is defined and SYSTEM_DEFAULTS.software_bfd.status == "enabled" %}
