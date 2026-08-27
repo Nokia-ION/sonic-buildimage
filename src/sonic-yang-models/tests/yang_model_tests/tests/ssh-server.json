@@ -87,5 +87,12 @@
     "SSH_SERVER_INVALID_LISTEN_ADDRESSES_WITH_PORT": {
         "desc": "Configure listen address with a port in SSH_SERVER.",
         "eStrKey": "InvalidValue"
+    },
+    "SSH_SERVER_VALID_DSCP": {
+        "desc": "Configure valid dscp value in SSH_SERVER."
+    },
+    "SSH_SERVER_INVALID_DSCP": {
+        "desc": "Configure out-of-range dscp value in SSH_SERVER.",
+        "eStrKey": "Range"
     }
 }
