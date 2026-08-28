@@ -23,6 +23,15 @@ Description: bgpmon.py -- populating bgp related information in stateDB.
     "previous" neighbor dictionary will be kept and used to determine if there
     is a need to perform update or the peer is stale to be removed from the
     state DB
+
+    In addition to the neighbor state above, this daemon publishes the BGP
+    neighbor configuration as FRR actually applied it into
+    BGP_NEIGH_APPLIED|<vrf>|<peer>. Those values are sourced from
+    'show bgp vrf all neighbors json', which is a different command from the
+    summary used for NEIGH_STATE_TABLE, because none of the applied
+    configuration is present in summary output. Reporting FRR's own view is the
+    point: it confirms that configuration written to CONFIG_DB was accepted by
+    the daemon, which reading CONFIG_DB back cannot show.
 """
 import json
 import os
@@ -34,6 +43,16 @@ from sonic_py_common.general import getstatusoutput_noshell
 
 PIPE_BATCH_MAX_COUNT = 50
 
+APPLIED_TABLE = "BGP_NEIGH_APPLIED"
+# Single row carrying the time of the last successful applied-config scrape. A
+# consumer needs it to tell "FRR has no value for this leaf" from "the producer
+# has not sampled yet"; without it an absent field is ambiguous and a config
+# acceptance check would report false rejections. Kept as one global row rather
+# than a per-peer timestamp so the write cost stays constant per poll.
+APPLIED_META_KEY = "BGP_NEIGH_APPLIED_META|global"
+# FRR emits this literal for the local or peer address when no socket is bound.
+UNKNOWN_ADDR = "Unknown"
+
 class BgpStateGet:
     def __init__(self):
         # set peer_l stores the Neighbor peer Ip address
@@ -44,11 +63,18 @@ class BgpStateGet:
         self.peer_state = {}
         self.new_peer_l = set()
         self.new_peer_state = {}
+        # dic applied_state maps (vrf, peer) to the field dictionary last
+        # published to BGP_NEIGH_APPLIED, so a write can be skipped when none of
+        # the applied values changed
+        self.applied_state = {}
+        self.new_applied_state = {}
         self.cached_timestamp = 0
         self.db = swsscommon.SonicV2Connector(use_unix_socket_path=True)
         self.db.connect(self.db.STATE_DB, False)
         self.pipe = swsscommon.RedisPipeline(self.db.get_redis_client(self.db.STATE_DB))
         self.db.delete_all_by_pattern(self.db.STATE_DB, "NEIGH_STATE_TABLE|*" )
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % APPLIED_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, APPLIED_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
     # A quick way to check if there are anything happening within BGP is to
@@ -188,6 +214,120 @@ class BgpStateGet:
         # Save the new set
         self.peer_l = self.new_peer_l.copy()
 
+    # Map one peer's neighbor-show JSON onto the BGP_NEIGH_APPLIED fields.
+    # A field is left out when FRR has no value for it, so that the consumer
+    # reports an absent leaf rather than inventing one.
+    def build_applied_fields(self, peer_info):
+        fields = {}
+
+        # adminShutDown is emitted only when the peer is administratively shut
+        # down, so its absence is what "enabled" looks like.
+        fields['enabled'] = 'false' if peer_info.get('adminShutDown') else 'true'
+
+        neighbor_addr = peer_info.get('neighborAddr')
+        if neighbor_addr and neighbor_addr != UNKNOWN_ADDR:
+            # Dynamically created peers are reported with a trailing '*'.
+            fields['neighbor_address'] = neighbor_addr.rstrip('*')
+
+        remote_as = peer_info.get('remoteAs')
+        if remote_as is not None:
+            fields['peer_as'] = str(remote_as)
+
+        # Absent unless the peer actually belongs to a peer group.
+        peer_group = peer_info.get('peerGroup')
+        if peer_group:
+            fields['peer_group'] = peer_group
+
+        local_addr = peer_info.get('hostLocal')
+        if local_addr and local_addr != UNKNOWN_ADDR:
+            fields['local_address'] = local_addr
+
+        remote_addr = peer_info.get('hostForeign')
+        if remote_addr and remote_addr != UNKNOWN_ADDR:
+            fields['remote_address'] = remote_addr
+
+        return fields
+
+    def update_new_applied_states(self, vrf, vrf_dict):
+        for peer, peer_info in vrf_dict.items():
+            # 'show bgp vrf all neighbors json' puts vrfId and vrfName as
+            # siblings of the peer entries, so anything that is not a dictionary
+            # is metadata and not a peer.
+            if not isinstance(peer_info, dict):
+                continue
+            self.new_applied_state[(vrf, peer)] = self.build_applied_fields(peer_info)
+
+    # Take a new snapshot of the applied neighbor configuration. Returns True
+    # only when the snapshot is usable, so a failed scrape cannot be mistaken
+    # for "FRR reports no neighbors" and wipe the table.
+    def get_all_applied_states(self):
+        cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp vrf all neighbors json']
+        try:
+            rc, output = getstatusoutput_noshell(cmd)
+            if rc:
+                syslog.syslog(syslog.LOG_WARNING,
+                              "*WARNING* Failed with rc:{} when execute: {}".format(rc, cmd))
+                return False
+            if len(output) == 0:
+                syslog.syslog(syslog.LOG_WARNING, "*WARNING* output none when execute: {}".format(cmd))
+                return False
+
+            vrf_info = json.loads(output)
+        except Exception as e:
+            # Deliberately does not exit the process the way get_all_neigh_states
+            # does: this scrape must never be able to take down the publisher of
+            # NEIGH_STATE_TABLE.
+            syslog.syslog(syslog.LOG_WARNING,
+                          "*WARNING* An unexpected error occurred: {} when execute: {}".format(e, cmd))
+            return False
+
+        self.new_applied_state.clear()
+        for vrf, vrf_dict in vrf_info.items():
+            if isinstance(vrf_dict, dict):
+                self.update_new_applied_states(vrf, vrf_dict)
+        return True
+
+    # BGP_NEIGH_APPLIED rows are rewritten rather than merged, because a field
+    # that FRR stopped reporting (a peer removed from its peer group, say) has to
+    # disappear from the row, and HSET alone cannot remove it.
+    def flush_applied_pipe(self, ops):
+        for key, value in ops:
+            command = swsscommon.RedisCommand()
+            command.formatDEL(key)
+            self.pipe.push(command)
+            if value is not None:
+                command = swsscommon.RedisCommand()
+                command.formatHSET(key, value)
+                self.pipe.push(command)
+
+        self.pipe.flush()
+        del ops[:]
+
+    def update_applied_states(self):
+        ops = []
+        for entry, fields in self.new_applied_state.items():
+            # Compare the whole published tuple, not just one field: an operator
+            # can change peer-as, peer-group or local-address while the session
+            # stays Established, and gating on session state alone would leave
+            # these values stale forever.
+            if self.applied_state.get(entry) != fields:
+                ops.append(("%s|%s|%s" % (APPLIED_TABLE, entry[0], entry[1]), fields))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        # Drop rows for peers FRR no longer reports
+        for entry in self.applied_state:
+            if entry not in self.new_applied_state:
+                ops.append(("%s|%s|%s" % (APPLIED_TABLE, entry[0], entry[1]), None))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        # Always refresh the marker, even when no row changed, since it is what
+        # tells a consumer the absent fields are current rather than unsampled.
+        ops.append((APPLIED_META_KEY, {'last_sync': str(int(time.time()))}))
+        self.flush_applied_pipe(ops)
+
+        self.applied_state = {entry: dict(fields)
+                              for entry, fields in self.new_applied_state.items()}
+
 def main():
 
     syslog.syslog(syslog.LOG_INFO, "bgpmon service started")
@@ -204,6 +344,12 @@ def main():
         if bgp_state_get.bgp_activity_detected():
             bgp_state_get.get_all_neigh_states()
             bgp_state_get.update_neigh_states()
+        # Intentionally outside the frr.log activity gate. A configuration change
+        # that FRR accepts without logging would otherwise never be scraped, and
+        # the applied values would stay stale indefinitely. The write itself is
+        # still change gated, so an idle system does not add Redis writes.
+        if bgp_state_get.get_all_applied_states():
+            bgp_state_get.update_applied_states()
 
 if __name__ == '__main__':
     main()
