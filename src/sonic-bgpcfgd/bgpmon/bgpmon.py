@@ -53,6 +53,18 @@ APPLIED_META_KEY = "BGP_NEIGH_APPLIED_META|global"
 # FRR emits this literal for the local or peer address when no socket is bound.
 UNKNOWN_ADDR = "Unknown"
 
+# Per-session counters, keyed the same way as the applied table because they come
+# from the same 'show bgp vrf all neighbors json' scrape, which covers every VRF.
+# They share APPLIED_META_KEY as their freshness marker rather than carrying one
+# of their own: a single scrape produces both tables, so one marker describes
+# both, and two markers could disagree only by being wrong.
+#
+# last_established holds FRR's epoch in seconds, exactly as FRR reports it. The
+# OpenConfig leaf is in nanoseconds, but converting here would invent precision
+# FRR does not have; the multiplication belongs with the rest of the model
+# translation in translib.
+STATS_TABLE = "BGP_NEIGH_STATS"
+
 class BgpStateGet:
     def __init__(self):
         # set peer_l stores the Neighbor peer Ip address
@@ -68,12 +80,17 @@ class BgpStateGet:
         # the applied values changed
         self.applied_state = {}
         self.new_applied_state = {}
+        # dic stats_state maps (vrf, peer) to the counter fields last published
+        # to BGP_NEIGH_STATS, on the same change-gated write as applied_state
+        self.stats_state = {}
+        self.new_stats_state = {}
         self.cached_timestamp = 0
         self.db = swsscommon.SonicV2Connector(use_unix_socket_path=True)
         self.db.connect(self.db.STATE_DB, False)
         self.pipe = swsscommon.RedisPipeline(self.db.get_redis_client(self.db.STATE_DB))
         self.db.delete_all_by_pattern(self.db.STATE_DB, "NEIGH_STATE_TABLE|*" )
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % APPLIED_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % STATS_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, APPLIED_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
@@ -248,6 +265,36 @@ class BgpStateGet:
 
         return fields
 
+    # Map one peer's neighbor-show JSON onto the BGP_NEIGH_STATS fields, with
+    # the same rule as the applied fields: a field FRR has no value for is left
+    # out rather than reported as zero, because zero is a real counter value and
+    # would be indistinguishable from "not reported".
+    def build_stats_fields(self, peer_info):
+        fields = {}
+
+        established = peer_info.get('connectionsEstablished')
+        if established is not None:
+            fields['established_transitions'] = str(established)
+
+        # FRR emits bgpTimerUpEstablishedEpoch only while the session is
+        # currently Established, so the field disappears when the session drops.
+        # That is why this table is rewritten rather than merged: a stale uptime
+        # left behind on a down session would read as if the session were up.
+        epoch = peer_info.get('bgpTimerUpEstablishedEpoch')
+        if epoch is not None:
+            fields['last_established'] = str(epoch)
+
+        msg_stats = peer_info.get('messageStats')
+        if isinstance(msg_stats, dict):
+            updates_recv = msg_stats.get('updatesRecv')
+            if updates_recv is not None:
+                fields['updates_received'] = str(updates_recv)
+            updates_sent = msg_stats.get('updatesSent')
+            if updates_sent is not None:
+                fields['updates_sent'] = str(updates_sent)
+
+        return fields
+
     def update_new_applied_states(self, vrf, vrf_dict):
         for peer, peer_info in vrf_dict.items():
             # 'show bgp vrf all neighbors json' puts vrfId and vrfName as
@@ -256,6 +303,7 @@ class BgpStateGet:
             if not isinstance(peer_info, dict):
                 continue
             self.new_applied_state[(vrf, peer)] = self.build_applied_fields(peer_info)
+            self.new_stats_state[(vrf, peer)] = self.build_stats_fields(peer_info)
 
     # Take a new snapshot of the applied neighbor configuration. Returns True
     # only when the snapshot is usable, so a failed scrape cannot be mistaken
@@ -282,14 +330,17 @@ class BgpStateGet:
             return False
 
         self.new_applied_state.clear()
+        self.new_stats_state.clear()
         for vrf, vrf_dict in vrf_info.items():
             if isinstance(vrf_dict, dict):
                 self.update_new_applied_states(vrf, vrf_dict)
         return True
 
-    # BGP_NEIGH_APPLIED rows are rewritten rather than merged, because a field
-    # that FRR stopped reporting (a peer removed from its peer group, say) has to
-    # disappear from the row, and HSET alone cannot remove it.
+    # BGP_NEIGH_APPLIED and BGP_NEIGH_STATS rows are rewritten rather than
+    # merged, because a field that FRR stopped reporting has to disappear from
+    # the row and HSET alone cannot remove it: a peer removed from its peer
+    # group for the applied table, a session that dropped and so no longer has
+    # an established epoch for the stats table.
     def flush_applied_pipe(self, ops):
         for key, value in ops:
             command = swsscommon.RedisCommand()
@@ -328,6 +379,29 @@ class BgpStateGet:
         self.applied_state = {entry: dict(fields)
                               for entry, fields in self.new_applied_state.items()}
 
+    # Counters are written from the same snapshot as the applied values, so this
+    # adds no vtysh call. It does add a write per poll for every session that is
+    # passing UPDATEs, which is what a counter table costs; an idle session still
+    # writes nothing, because the comparison below gates on the whole field set.
+    def update_stats_states(self):
+        ops = []
+        for entry, fields in self.new_stats_state.items():
+            if self.stats_state.get(entry) != fields:
+                ops.append(("%s|%s|%s" % (STATS_TABLE, entry[0], entry[1]), fields))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        # Drop rows for peers FRR no longer reports
+        for entry in self.stats_state:
+            if entry not in self.new_stats_state:
+                ops.append(("%s|%s|%s" % (STATS_TABLE, entry[0], entry[1]), None))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        if len(ops) > 0:
+            self.flush_applied_pipe(ops)
+
+        self.stats_state = {entry: dict(fields)
+                            for entry, fields in self.new_stats_state.items()}
+
 def main():
 
     syslog.syslog(syslog.LOG_INFO, "bgpmon service started")
@@ -349,6 +423,12 @@ def main():
         # the applied values would stay stale indefinitely. The write itself is
         # still change gated, so an idle system does not add Redis writes.
         if bgp_state_get.get_all_applied_states():
+            # Counters go first because the freshness marker both tables share is
+            # written at the end of update_applied_states. Writing the marker
+            # last means it can only ever be older than the rows it vouches for,
+            # never newer, so a consumer cannot see a fresh marker over counters
+            # from the previous poll.
+            bgp_state_get.update_stats_states()
             bgp_state_get.update_applied_states()
 
 if __name__ == '__main__':

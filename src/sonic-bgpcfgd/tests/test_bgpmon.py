@@ -93,7 +93,16 @@ APPLIED_NEIGH_JSON = {
             "hostLocal": "11.0.0.154",
             "portLocal": 48810,
             "hostForeign": "11.0.0.155",
-            "portForeign": 179
+            "portForeign": 179,
+            "connectionsEstablished": 3,
+            "connectionsDropped": 2,
+            "bgpTimerUpEstablishedEpoch": 1756400000,
+            "messageStats": {
+                "updatesRecv": 41,
+                "updatesSent": 17,
+                "notificationsRecv": 1,
+                "notificationsSent": 0
+            }
         }
     }
 }
@@ -285,3 +294,133 @@ def test_applied_scrape_uses_vrf_all_neighbors(bgp_mon):
         bgp_mon.get_all_applied_states()
     cmd = mocked_cmd.call_args[0][0]
     assert 'show bgp vrf all neighbors json' in cmd
+
+
+def test_stats_fields_from_live_shape(bgp_mon):
+    """Every counter field is mapped from the same neighbor-show JSON, so the
+    counters cost no additional vtysh call."""
+    assert scrape(bgp_mon, APPLIED_NEIGH_JSON) is True
+    assert bgp_mon.new_stats_state == {
+        ("default", "11.0.0.155"): {
+            'established_transitions': '3',
+            'last_established': '1756400000',
+            'updates_received': '41',
+            'updates_sent': '17'
+        }
+    }
+
+
+def test_stats_last_established_absent_while_session_is_down(bgp_mon):
+    """FRR emits bgpTimerUpEstablishedEpoch only while the session is
+    Established, so a down session must report no established epoch rather than
+    the epoch of a session that has since dropped."""
+    down = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    del down["default"]["11.0.0.155"]["bgpTimerUpEstablishedEpoch"]
+    down["default"]["11.0.0.155"]["bgpState"] = "Idle"
+
+    assert scrape(bgp_mon, down) is True
+    fields = bgp_mon.new_stats_state[("default", "11.0.0.155")]
+    assert 'last_established' not in fields
+    # The counters themselves survive a session drop, since FRR keeps them.
+    assert fields['established_transitions'] == '3'
+
+
+def test_stats_zero_counter_is_published(bgp_mon):
+    """Zero is a real counter value, not a missing one, so it must be written.
+    Treating it as absent would report a brand new session as unmapped."""
+    fields = bgp_mon.build_stats_fields({
+        "connectionsEstablished": 0,
+        "messageStats": {"updatesRecv": 0, "updatesSent": 0}
+    })
+    assert fields['established_transitions'] == '0'
+    assert fields['updates_received'] == '0'
+    assert fields['updates_sent'] == '0'
+
+
+def test_stats_absent_message_stats_yields_no_update_fields(bgp_mon):
+    """A peer FRR reports without messageStats leaves the UPDATE counters unset
+    rather than defaulting them to zero."""
+    fields = bgp_mon.build_stats_fields({"connectionsEstablished": 1})
+    assert 'updates_received' not in fields
+    assert 'updates_sent' not in fields
+    assert fields['established_transitions'] == '1'
+
+
+def test_stats_first_scrape_writes_row(bgp_mon):
+    """A newly seen peer gets a counter row."""
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_stats_states()
+    assert "BGP_NEIGH_STATS|default|11.0.0.155" in [key for key, _ in captured]
+
+
+def test_stats_unchanged_scrape_writes_nothing(bgp_mon):
+    """Unlike the applied table, the counter table owns no marker, so an idle
+    session must produce no write at all."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_stats_states()
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_stats_states()
+    assert captured == []
+
+
+def test_stats_changed_counter_is_rewritten(bgp_mon):
+    """A counter that moved must be republished."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_stats_states()
+
+    changed = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    changed["default"]["11.0.0.155"]["messageStats"]["updatesRecv"] = 42
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, changed)
+    bgp_mon.update_stats_states()
+    written = dict(captured)
+    assert written["BGP_NEIGH_STATS|default|11.0.0.155"]['updates_received'] == '42'
+
+
+def test_stats_row_is_republished_without_the_field_that_vanished(bgp_mon):
+    """The row is rewritten rather than merged: when the session drops and FRR
+    stops reporting the established epoch, the field has to leave the row, which
+    an HSET on its own could not do."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_stats_states()
+
+    down = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    del down["default"]["11.0.0.155"]["bgpTimerUpEstablishedEpoch"]
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, down)
+    bgp_mon.update_stats_states()
+    written = dict(captured)
+    assert 'last_established' not in written["BGP_NEIGH_STATS|default|11.0.0.155"]
+
+
+def test_stats_stale_peer_is_deleted(bgp_mon):
+    """A peer FRR stopped reporting must have its counter row removed."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_stats_states()
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, {"default": {"vrfId": 0, "vrfName": "default"}})
+    bgp_mon.update_stats_states()
+    assert ("BGP_NEIGH_STATS|default|11.0.0.155", None) in captured
+
+
+def test_stats_multiple_vrfs_are_keyed_separately(bgp_mon):
+    """The scrape covers every VRF, so the counter key carries the VRF the same
+    way the applied key does."""
+    payload = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    payload["Vrf1"] = json.loads(json.dumps(APPLIED_NEIGH_JSON["default"]))
+    payload["Vrf1"]["vrfName"] = "Vrf1"
+    payload["Vrf1"]["11.0.0.155"]["messageStats"]["updatesRecv"] = 99
+
+    assert scrape(bgp_mon, payload) is True
+    assert bgp_mon.new_stats_state[("default", "11.0.0.155")]['updates_received'] == '41'
+    assert bgp_mon.new_stats_state[("Vrf1", "11.0.0.155")]['updates_received'] == '99'
