@@ -65,6 +65,22 @@ UNKNOWN_ADDR = "Unknown"
 # translation in translib.
 STATS_TABLE = "BGP_NEIGH_STATS"
 
+# Per-address-family prefix counters. FRR reports them per address family under
+# addressFamilyInfo, so the address family joins the key rather than being folded
+# into a field name, which keeps a row per (peer, address family) the way the
+# OpenConfig afi-safi list is keyed and lets a consumer read one family without
+# parsing the other's fields. Shares APPLIED_META_KEY for the same reason
+# STATS_TABLE does: one scrape produces all three tables.
+AF_STATS_TABLE = "BGP_NEIGH_AF_STATS"
+# FRR names the address families in camel case in its neighbor output, while
+# SONiC keys them the way BGP_NEIGHBOR_AF already does. Only the two families the
+# OpenConfig model maps are published; a family no consumer reads would cost a
+# write per poll for nothing.
+AF_STATS_NAMES = {
+    'ipv4Unicast': 'ipv4_unicast',
+    'ipv6Unicast': 'ipv6_unicast',
+}
+
 class BgpStateGet:
     def __init__(self):
         # set peer_l stores the Neighbor peer Ip address
@@ -84,6 +100,10 @@ class BgpStateGet:
         # to BGP_NEIGH_STATS, on the same change-gated write as applied_state
         self.stats_state = {}
         self.new_stats_state = {}
+        # dic af_stats_state maps (vrf, peer, afi_safi) to the prefix counter
+        # fields last published to BGP_NEIGH_AF_STATS, change gated the same way
+        self.af_stats_state = {}
+        self.new_af_stats_state = {}
         self.cached_timestamp = 0
         self.db = swsscommon.SonicV2Connector(use_unix_socket_path=True)
         self.db.connect(self.db.STATE_DB, False)
@@ -91,6 +111,7 @@ class BgpStateGet:
         self.db.delete_all_by_pattern(self.db.STATE_DB, "NEIGH_STATE_TABLE|*" )
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % APPLIED_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % STATS_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % AF_STATS_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, APPLIED_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
@@ -295,6 +316,40 @@ class BgpStateGet:
 
         return fields
 
+    # Map one address family entry of one peer onto the BGP_NEIGH_AF_STATS
+    # fields, with the same absent-means-not-reported rule as the other tables.
+    def build_af_stats_fields(self, af_info):
+        fields = {}
+
+        received = af_info.get('acceptedPrefixCounter')
+        if received is not None:
+            fields['prefixes_received'] = str(received)
+
+        # FRR emits sentPrefixCounter only while the peer belongs to an outbound
+        # update subgroup, which it joins a moment after the session establishes
+        # and leaves when the session drops, so this field is legitimately
+        # missing on a session that has just come up.
+        sent = af_info.get('sentPrefixCounter')
+        if sent is not None:
+            fields['prefixes_sent'] = str(sent)
+
+        return fields
+
+    def update_new_af_stats_states(self, vrf, peer, peer_info):
+        af_info = peer_info.get('addressFamilyInfo')
+        if not isinstance(af_info, dict):
+            return
+        for frr_af, af_entry in af_info.items():
+            afi_safi = AF_STATS_NAMES.get(frr_af)
+            if afi_safi is None or not isinstance(af_entry, dict):
+                continue
+            fields = self.build_af_stats_fields(af_entry)
+            # A family FRR reports no counter at all for is left unpublished
+            # rather than written as an empty row, so the removal pass below
+            # deletes a row whose counters have gone away.
+            if fields:
+                self.new_af_stats_state[(vrf, peer, afi_safi)] = fields
+
     def update_new_applied_states(self, vrf, vrf_dict):
         for peer, peer_info in vrf_dict.items():
             # 'show bgp vrf all neighbors json' puts vrfId and vrfName as
@@ -304,6 +359,7 @@ class BgpStateGet:
                 continue
             self.new_applied_state[(vrf, peer)] = self.build_applied_fields(peer_info)
             self.new_stats_state[(vrf, peer)] = self.build_stats_fields(peer_info)
+            self.update_new_af_stats_states(vrf, peer, peer_info)
 
     # Take a new snapshot of the applied neighbor configuration. Returns True
     # only when the snapshot is usable, so a failed scrape cannot be mistaken
@@ -331,6 +387,7 @@ class BgpStateGet:
 
         self.new_applied_state.clear()
         self.new_stats_state.clear()
+        self.new_af_stats_state.clear()
         for vrf, vrf_dict in vrf_info.items():
             if isinstance(vrf_dict, dict):
                 self.update_new_applied_states(vrf, vrf_dict)
@@ -402,6 +459,29 @@ class BgpStateGet:
         self.stats_state = {entry: dict(fields)
                             for entry, fields in self.new_stats_state.items()}
 
+    # Same snapshot again, so no extra vtysh call. The removal pass matters more
+    # here than for the other tables: a family deactivated on a peer that stays
+    # up leaves the peer in the scrape while its family entry disappears, and a
+    # row left behind would report the prefix counts of a family no longer
+    # negotiated.
+    def update_af_stats_states(self):
+        ops = []
+        for entry, fields in self.new_af_stats_state.items():
+            if self.af_stats_state.get(entry) != fields:
+                ops.append(("%s|%s|%s|%s" % (AF_STATS_TABLE, entry[0], entry[1], entry[2]), fields))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        for entry in self.af_stats_state:
+            if entry not in self.new_af_stats_state:
+                ops.append(("%s|%s|%s|%s" % (AF_STATS_TABLE, entry[0], entry[1], entry[2]), None))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        if len(ops) > 0:
+            self.flush_applied_pipe(ops)
+
+        self.af_stats_state = {entry: dict(fields)
+                              for entry, fields in self.new_af_stats_state.items()}
+
 def main():
 
     syslog.syslog(syslog.LOG_INFO, "bgpmon service started")
@@ -429,6 +509,7 @@ def main():
             # never newer, so a consumer cannot see a fresh marker over counters
             # from the previous poll.
             bgp_state_get.update_stats_states()
+            bgp_state_get.update_af_stats_states()
             bgp_state_get.update_applied_states()
 
 if __name__ == '__main__':

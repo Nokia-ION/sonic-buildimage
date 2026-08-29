@@ -102,6 +102,18 @@ APPLIED_NEIGH_JSON = {
                 "updatesSent": 17,
                 "notificationsRecv": 1,
                 "notificationsSent": 0
+            },
+            "addressFamilyInfo": {
+                "ipv4Unicast": {
+                    "peerGroupMember": "PG1",
+                    "acceptedPrefixCounter": 7,
+                    "sentPrefixCounter": 4
+                },
+                "ipv6Unicast": {
+                    "peerGroupMember": "PG1",
+                    "acceptedPrefixCounter": 2,
+                    "sentPrefixCounter": 1
+                }
             }
         }
     }
@@ -424,3 +436,184 @@ def test_stats_multiple_vrfs_are_keyed_separately(bgp_mon):
     assert scrape(bgp_mon, payload) is True
     assert bgp_mon.new_stats_state[("default", "11.0.0.155")]['updates_received'] == '41'
     assert bgp_mon.new_stats_state[("Vrf1", "11.0.0.155")]['updates_received'] == '99'
+
+
+def test_af_stats_fields_from_live_shape(bgp_mon):
+    """The prefix counters come from addressFamilyInfo in the same scrape, with
+    one row per address family so a consumer can read one family without parsing
+    the other's fields."""
+    assert scrape(bgp_mon, APPLIED_NEIGH_JSON) is True
+    assert bgp_mon.new_af_stats_state == {
+        ("default", "11.0.0.155", "ipv4_unicast"): {
+            'prefixes_received': '7',
+            'prefixes_sent': '4'
+        },
+        ("default", "11.0.0.155", "ipv6_unicast"): {
+            'prefixes_received': '2',
+            'prefixes_sent': '1'
+        }
+    }
+
+
+def test_af_stats_sent_absent_until_update_subgroup_forms(bgp_mon):
+    """FRR guards sentPrefixCounter on the peer belonging to an outbound update
+    subgroup, which it joins a moment after the session establishes. The field
+    is genuinely missing in that window, so it must be left unset rather than
+    reported as zero prefixes sent."""
+    settling = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    del settling["default"]["11.0.0.155"]["addressFamilyInfo"]["ipv4Unicast"]["sentPrefixCounter"]
+
+    assert scrape(bgp_mon, settling) is True
+    fields = bgp_mon.new_af_stats_state[("default", "11.0.0.155", "ipv4_unicast")]
+    assert 'prefixes_sent' not in fields
+    assert fields['prefixes_received'] == '7'
+
+
+def test_af_stats_zero_prefix_count_is_published(bgp_mon):
+    """Zero prefixes is a real count, and the one a session under RFC 8212
+    policy reports, so it must not be mistaken for an unreported counter."""
+    fields = bgp_mon.build_af_stats_fields({
+        "acceptedPrefixCounter": 0,
+        "sentPrefixCounter": 0
+    })
+    assert fields['prefixes_received'] == '0'
+    assert fields['prefixes_sent'] == '0'
+
+
+def test_af_stats_unmapped_family_is_ignored(bgp_mon):
+    """Only the two families the model maps are published; a row no consumer
+    reads would cost a write per poll for nothing."""
+    payload = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    payload["default"]["11.0.0.155"]["addressFamilyInfo"]["l2VpnEvpn"] = {
+        "acceptedPrefixCounter": 5
+    }
+
+    assert scrape(bgp_mon, payload) is True
+    families = sorted(af for _, _, af in bgp_mon.new_af_stats_state)
+    assert families == ["ipv4_unicast", "ipv6_unicast"]
+
+
+def test_af_stats_family_without_counters_is_not_published(bgp_mon):
+    """A family FRR reports no counter at all for yields no row, rather than an
+    empty one that would claim the family was sampled."""
+    payload = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    payload["default"]["11.0.0.155"]["addressFamilyInfo"]["ipv6Unicast"] = {
+        "peerGroupMember": "PG1"
+    }
+
+    assert scrape(bgp_mon, payload) is True
+    assert ("default", "11.0.0.155", "ipv6_unicast") not in bgp_mon.new_af_stats_state
+    assert ("default", "11.0.0.155", "ipv4_unicast") in bgp_mon.new_af_stats_state
+
+
+def test_af_stats_missing_address_family_info_is_tolerated(bgp_mon):
+    """A peer reported without addressFamilyInfo must not fail the scrape, since
+    the same scrape carries the applied values and the session counters."""
+    payload = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    del payload["default"]["11.0.0.155"]["addressFamilyInfo"]
+
+    assert scrape(bgp_mon, payload) is True
+    assert bgp_mon.new_af_stats_state == {}
+    assert ("default", "11.0.0.155") in bgp_mon.new_applied_state
+
+
+def test_af_stats_first_scrape_writes_a_row_per_family(bgp_mon):
+    """The address family is part of the key, the way the afi-safi list is
+    keyed."""
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_af_stats_states()
+    keys = [key for key, _ in captured]
+    assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast" in keys
+    assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast" in keys
+
+
+def test_af_stats_unchanged_scrape_writes_nothing(bgp_mon):
+    """This table owns no marker either, so a session whose prefix counts are
+    steady must produce no write."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_af_stats_states()
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_af_stats_states()
+    assert captured == []
+
+
+def test_af_stats_changed_counter_rewrites_only_its_family(bgp_mon):
+    """Keying by family is what keeps a count moving in one family from
+    rewriting the other family's row."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_af_stats_states()
+
+    changed = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    changed["default"]["11.0.0.155"]["addressFamilyInfo"]["ipv4Unicast"]["acceptedPrefixCounter"] = 9
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, changed)
+    bgp_mon.update_af_stats_states()
+    written = dict(captured)
+    assert written["BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast"]['prefixes_received'] == '9'
+    assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast" not in written
+
+
+def test_af_stats_row_is_republished_without_the_field_that_vanished(bgp_mon):
+    """When the session drops the peer leaves its update subgroup and FRR stops
+    reporting the sent count, so the field has to leave the row."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_af_stats_states()
+
+    dropped = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    del dropped["default"]["11.0.0.155"]["addressFamilyInfo"]["ipv4Unicast"]["sentPrefixCounter"]
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, dropped)
+    bgp_mon.update_af_stats_states()
+    written = dict(captured)
+    assert 'prefixes_sent' not in written["BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast"]
+
+
+def test_af_stats_deactivated_family_row_is_deleted(bgp_mon):
+    """A family deactivated on a peer that stays up leaves the peer in the
+    scrape while its family entry disappears. The row has to go, or it would
+    report the prefix counts of a family no longer negotiated."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_af_stats_states()
+
+    deactivated = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    del deactivated["default"]["11.0.0.155"]["addressFamilyInfo"]["ipv6Unicast"]
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, deactivated)
+    bgp_mon.update_af_stats_states()
+    assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast", None) in captured
+    assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast", None) not in captured
+
+
+def test_af_stats_stale_peer_deletes_every_family_row(bgp_mon):
+    """A peer FRR stopped reporting must take all of its family rows with it."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_af_stats_states()
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, {"default": {"vrfId": 0, "vrfName": "default"}})
+    bgp_mon.update_af_stats_states()
+    assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast", None) in captured
+    assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast", None) in captured
+
+
+def test_af_stats_multiple_vrfs_are_keyed_separately(bgp_mon):
+    """The same peer IP in two VRFs, in the same family, must stay distinct."""
+    payload = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    payload["Vrf1"] = json.loads(json.dumps(APPLIED_NEIGH_JSON["default"]))
+    payload["Vrf1"]["vrfName"] = "Vrf1"
+    payload["Vrf1"]["11.0.0.155"]["addressFamilyInfo"]["ipv4Unicast"]["acceptedPrefixCounter"] = 31
+
+    assert scrape(bgp_mon, payload) is True
+    assert bgp_mon.new_af_stats_state[("default", "11.0.0.155", "ipv4_unicast")]['prefixes_received'] == '7'
+    assert bgp_mon.new_af_stats_state[("Vrf1", "11.0.0.155", "ipv4_unicast")]['prefixes_received'] == '31'
