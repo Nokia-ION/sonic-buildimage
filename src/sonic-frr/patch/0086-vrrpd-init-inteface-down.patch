@@ -1,0 +1,38 @@
+From cf4f61f7759f2259f0767fbcf27b80f67b43a2d5 Mon Sep 17 00:00:00 2001
+From: srinj <sriniketh.j@nokia.com>
+Date: Sun, 30 Aug 2026 12:16:55 +0530
+Subject: [PATCH] fix: vrrpd move to init on interface shutdown
+
+---
+ vrrpd/vrrp.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/vrrpd/vrrp.c b/vrrpd/vrrp.c
+index 29cb331518..3554671580 100644
+--- a/vrrpd/vrrp.c
++++ b/vrrpd/vrrp.c
+@@ -2435,9 +2435,20 @@ void vrrp_if_down(struct interface *ifp)
+ 	vrs = vrrp_lookup_by_if_any(ifp);
+ 
+ 	for (ALL_LIST_ELEMENTS_RO(vrs, ln, vr)) {
++		if (vr->ifp == ifp && vr->vrrp) {
++			zlog_info(VRRP_LOGPFX VRRP_LOGPFX_VRID VRRP_LOGPFX_FAM
++				  "Parent interface %s down; shutting down (state %s)",
++				  vr->vrid, family2str(vr->vrrp->family),
++				  ifp->name,
++				  vrrp_state_names[vr->vrrp->fsm.state]);
++			if (vr->vrrp->fsm.state != VRRP_STATE_INITIALIZE)
++				vrrp_event(vr->vrrp, VRRP_EVENT_SHUTDOWN);
++			continue;
++		}
++
+ 		vrrp_check_start(vr);
+ 
+-		if (vr->ifp == ifp || vr->vrrp->mvl_ifp == ifp) {
++		if (vr->vrrp && vr->vrrp->mvl_ifp == ifp) {
+ 			DEBUGD(&vrrp_dbg_auto,
+ 			       VRRP_LOGPFX VRRP_LOGPFX_VRID "Interface %s down",
+ 			       vr->vrid, ifp->name);
+-- 
+2.43.0
+
