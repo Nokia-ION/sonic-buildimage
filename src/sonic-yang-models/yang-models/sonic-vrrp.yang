@@ -90,8 +90,45 @@ module sonic-vrrp {
                     }
                 }
 
-                leaf pre_empt {
+                leaf preempt {
+                    type stypes:admin_mode;
+                    default "enabled";
+                    description
+                        "When enabled, a higher priority backup router preempts a
+                         lower priority master router. Corresponds to the OpenConfig
+                         vrrp-group/preempt leaf, whose default is true.";
+                }
+
+                leaf accept_mode {
                     type stypes:boolean_type;
+                    default "false";
+                    description
+                        "Controls whether packets destined for the virtual addresses
+                         are accepted when the virtual address is not owned by the
+                         router interface. Corresponds to the OpenConfig
+                         vrrp-group/accept-mode leaf, and defaults to false per
+                         RFC 5798 Accept_Mode. Not currently programmed into FRR.";
+                }
+
+                leaf preempt_delay {
+                    type uint16 {
+                        range "0..3600";
+                    }
+                    units "seconds";
+                    default 0;
+                    description
+                        "Time to wait before preempting the current master.
+                         Corresponds to the OpenConfig vrrp-group/preempt-delay
+                         leaf. FRR exposes no equivalent knob, so this is not
+                         currently programmed into FRR.";
+                }
+
+                leaf admin_status {
+                    type stypes:admin_status;
+                    default "up";
+                    description
+                        "Administrative state of the VRRP instance.
+                         down programs FRR 'vrrp <id> shutdown'.";
                 }
 
                 leaf use_v2_checksum {
@@ -110,18 +147,6 @@ module sonic-vrrp {
                         range "1..254";
                     }
                     default 1;
-                }
-
-                leaf accept_mode {
-                    type stypes:boolean_type;
-                    default false;
-                }
-
-                leaf preempt_delay {
-                    type uint16 {
-                        range "0..3600";
-                    }
-                    default 0;
                 }
 
                 leaf-list vip {
@@ -213,8 +238,45 @@ module sonic-vrrp {
                     }
                 }
 
-                leaf pre_empt {
+                leaf preempt {
+                    type stypes:admin_mode;
+                    default "enabled";
+                    description
+                        "When enabled, a higher priority backup router preempts a
+                         lower priority master router. Corresponds to the OpenConfig
+                         vrrp-group/preempt leaf, whose default is true.";
+                }
+
+                leaf accept_mode {
                     type stypes:boolean_type;
+                    default "false";
+                    description
+                        "Controls whether packets destined for the virtual addresses
+                         are accepted when the virtual address is not owned by the
+                         router interface. Corresponds to the OpenConfig
+                         vrrp-group/accept-mode leaf, and defaults to false per
+                         RFC 5798 Accept_Mode. Not currently programmed into FRR.";
+                }
+
+                leaf preempt_delay {
+                    type uint16 {
+                        range "0..3600";
+                    }
+                    units "seconds";
+                    default 0;
+                    description
+                        "Time to wait before preempting the current master.
+                         Corresponds to the OpenConfig vrrp-group/preempt-delay
+                         leaf. FRR exposes no equivalent knob, so this is not
+                         currently programmed into FRR.";
+                }
+
+                leaf admin_status {
+                    type stypes:admin_status;
+                    default "up";
+                    description
+                        "Administrative state of the VRRPv6 instance.
+                         down programs FRR 'vrrp6 <id> shutdown'.";
                 }
 
                 leaf use_v2_checksum {
@@ -233,18 +295,6 @@ module sonic-vrrp {
                         range "1..254";
                     }
                     default 1;
-                }
-
-                leaf accept_mode {
-                    type stypes:boolean_type;
-                    default false;
-                }
-
-                leaf preempt_delay {
-                    type uint16 {
-                        range "0..3600";
-                    }
-                    default 0;
                 }
 
                 leaf virtual_link_local {
