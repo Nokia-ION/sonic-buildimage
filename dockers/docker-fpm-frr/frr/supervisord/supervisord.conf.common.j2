@@ -175,19 +175,6 @@ environment=ASAN_OPTIONS="log_path=/var/log/asan/fpmsyncd-asan.log{{ asan_extra_
 {% endif %}
 
 {% if DEVICE_METADATA is defined and DEVICE_METADATA.localhost.frr_mgmt_framework_config is defined and DEVICE_METADATA.localhost.frr_mgmt_framework_config == "true" %}
-[program:vrrpmgrd]
-command=vrrpmgrd
-priority={{ _pbase + 2 }}
-autostart=false
-autorestart=false
-startsecs=0
-stdout_logfile=syslog
-stderr_logfile=syslog
-{% if _dep %}
-dependent_startup=true
-dependent_startup_wait_for=vrrpd:running
-{% endif %}
-
 [program:frrcfgd]
 command=/usr/local/bin/frrcfgd
 {% else %}
