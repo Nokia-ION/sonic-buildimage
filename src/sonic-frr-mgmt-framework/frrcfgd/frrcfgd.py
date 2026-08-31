@@ -7,6 +7,7 @@ import time
 import syslog
 import os
 from swsscommon.swsscommon import ConfigDBConnector, isInterfaceNameValid, isVrfNameValid
+from swsscommon import swsscommon
 from sonic_py_common.bgp import validate_asn
 import socket
 import threading
@@ -17,6 +18,7 @@ import logging
 import netaddr
 import ipaddress
 import io
+import json
 import struct
 
 class CachedDataWithOp:
@@ -2653,9 +2655,10 @@ class BGPConfigDaemon:
             elif param == 'admin_status' and (data[param] == 'up' or data[param] == ''):
                 command += ['-c', 'no {} shutdown'.format(cmd)]
             elif param == 'preempt':
-                if data[param] == 'enabled':
+                val = str(data[param]).strip().lower()
+                if val in ('enabled', 'true', 'yes', '1'):
                     command += ['-c', '{} preempt'.format(cmd)]
-                elif data[param] == 'disabled':
+                elif val in ('disabled', 'false', 'no', '0'):
                     command += ['-c', 'no {} preempt'.format(cmd)]
             elif param == 'use_v2_checksum':
                 val = str(data[param]).strip().lower()
@@ -2672,6 +2675,7 @@ class BGPConfigDaemon:
                 )
 
         self.__run_command(table, command)
+        vrrp_state_refresh()
 
     def vrrp6_handler(self, table, key, data):
         syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](vrrp6) value for {} changed to {}'.format(key, data))
@@ -2707,9 +2711,10 @@ class BGPConfigDaemon:
             elif param == 'admin_status' and (data[param] == 'up' or data[param] == ''):
                 command += ['-c', 'no {} shutdown'.format(cmd)]
             elif param == 'preempt':
-                if data[param] == 'enabled':
+                val = str(data[param]).strip().lower()
+                if val in ('enabled', 'true', 'yes', '1'):
                     command += ['-c', '{} preempt'.format(cmd)]
-                elif data[param] == 'disabled':
+                elif val in ('disabled', 'false', 'no', '0'):
                     command += ['-c', 'no {} preempt'.format(cmd)]
             elif param in deferred_params:
                 syslog.syslog(
@@ -2720,6 +2725,7 @@ class BGPConfigDaemon:
                 )
 
         self.__run_command(table, command)
+        vrrp_state_refresh()
 
     def vrrp_track_handler(self, table, key, data):
         syslog.syslog(syslog.LOG_INFO, '[bgp cfgd](vrrp track) value for {} changed to {}'.format(key, data))
@@ -2733,6 +2739,7 @@ class BGPConfigDaemon:
         elif 'priority_increment' in data:
             command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', '{} priority-dec {}'.format(cmd, data['priority_increment'])]
             self.__run_command(table, command)
+        vrrp_state_refresh()
 
     def vrrp6_track_handler(self, table, key, data):
         syslog.syslog(syslog.LOG_INFO, '[bgp cfgd](vrrp6 track) value for {} changed to {}'.format(key, data))
@@ -2746,6 +2753,7 @@ class BGPConfigDaemon:
         elif 'priority_increment' in data:
             command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', '{} priority-dec {}'.format(cmd, data['priority_increment'])]
             self.__run_command(table, command)
+        vrrp_state_refresh()
 
     def vrf_handler(self, table, key, data):
         syslog.syslog(syslog.LOG_INFO, '[bgp cfgd](vrf) value for {} changed to {}'.format(key, data))
@@ -4302,7 +4310,161 @@ class BGPConfigDaemon:
         if self.config_db.sub_thread.is_alive():
             self.config_db.sub_thread.join()
 
+class VrrpVtyClient:
+    """Read-only vty connection to FRR vrrpd, private to the state sync thread.
+    Note: BgpdClientMgr's connection: serialized by a
+    lock held across configuration (120s socket timeout).
+    """
+    SOCK_PATH = '/run/frr/vrrpd.vty'
+    TIMEOUT_SEC = 5
+    MAX_REPLY_BYTES = 4 * 1024 * 1024
+
+    def __init__(self):
+        self.sock = None
+
+    def close(self):
+        if self.sock is None:
+            return
+        try:
+            self.sock.close()
+        except socket.error:
+            pass
+        self.sock = None
+
+    def __connect(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.TIMEOUT_SEC)
+        sock.connect(self.SOCK_PATH)
+        self.sock = sock
+
+    def __recv_reply(self):
+        buf = bytearray()
+        while True:
+            chunk = self.sock.recv(16384)
+            if not chunk:
+                raise socket.error('vrrpd closed the vty connection')
+            buf += chunk
+            if len(buf) > self.MAX_REPLY_BYTES:
+                raise ValueError('reply exceeded %d bytes' % self.MAX_REPLY_BYTES)
+            if len(buf) >= 4 and buf[-4] == 0 and buf[-3] == 0 and buf[-2] == 0:
+                return (buf[-1], buf[:-4].decode('utf-8', 'replace'))
+
+    def run(self, command):
+        for _ in range(2):
+            try:
+                if self.sock is None:
+                    self.__connect()
+                self.sock.sendall(bytes(command + '\0', 'utf-8'))
+                ret_code, reply = self.__recv_reply()
+                if ret_code != 0:
+                    syslog.syslog(syslog.LOG_WARNING,
+                                  '[vrrp state] "%s" returned code %d' % (command, ret_code))
+                    return None
+                return reply
+            except (socket.error, ValueError) as msg:
+                syslog.syslog(syslog.LOG_WARNING,
+                              '[vrrp state] "%s" failed: %s' % (command, msg))
+                self.close()
+        return None
+
+
+class VrrpStateSync(threading.Thread):
+    AF_SOURCES = [('vrrp', 'show vrrp json', 'v4', 'VRRP_STATE_TABLE'),
+                  ('vrrp6', 'show vrrp6 json', 'v6', 'VRRP6_STATE_TABLE')]
+    POLL_INTERVAL_SEC = 2
+
+    def __init__(self):
+        super(VrrpStateSync, self).__init__(name='VRRP state sync')
+        self.daemon = True
+        self.vty = VrrpVtyClient()
+        self.stop_event = threading.Event()
+        self.refresh_event = threading.Event()
+        self.state_db = swsscommon.DBConnector('STATE_DB', 0)
+        self.tables = {af: swsscommon.Table(self.state_db, table_name)
+                       for af, _, _, table_name in self.AF_SOURCES}
+        self.published = {af: None for af, _, _, _ in self.AF_SOURCES}
+
+    def request_refresh(self):
+        self.refresh_event.set()
+
+    def shutdown(self):
+        self.stop_event.set()
+        self.refresh_event.set()
+
+    @staticmethod
+    def __parse_reply(reply, af_key):
+        rows = {}
+        for entry in json.loads(reply):
+            af_data = entry.get(af_key)
+            if not isinstance(af_data, dict):
+                continue
+            ifname = entry.get('interface')
+            vrid = entry.get('vrid')
+            priority = af_data.get('effectivePriority')
+            state = af_data.get('status')
+            if ifname is None or vrid is None or priority is None or state is None:
+                continue
+            rows['{}|{}'.format(ifname, vrid)] = (int(priority), str(state))
+        return rows
+
+    def __publish(self, af, rows):
+        table = self.tables[af]
+        prev = self.published[af]
+        if prev is None:
+            prev = {key: None for key in table.getKeys()}
+        now = str(int(time.time()))
+        published = {}
+        for key, (priority, state) in rows.items():
+            fields = {'effective_priority': str(priority), 'state': state}
+            old = prev.get(key)
+            if old is not None and all(old.get(f) == v for f, v in fields.items()):
+                published[key] = old
+                continue
+            fields['last_changed'] = now
+            table.set(key, list(fields.items()))
+            published[key] = fields
+        for key in prev:
+            if key not in rows:
+                table._del(key)
+        self.published[af] = published
+
+    def __poll(self):
+        for af, command, af_key, _ in self.AF_SOURCES:
+            reply = self.vty.run(command)
+            if reply is None:
+                continue
+            reply = reply.strip()
+            if not reply:
+                continue
+            try:
+                rows = self.__parse_reply(reply, af_key)
+            except (ValueError, TypeError) as msg:
+                syslog.syslog(syslog.LOG_WARNING,
+                              '[vrrp state] cannot parse "%s" output: %s' % (command, msg))
+                continue
+            self.__publish(af, rows)
+
+    def run(self):
+        syslog.syslog(syslog.LOG_INFO, '[vrrp state] state sync started')
+        while not self.stop_event.is_set():
+            try:
+                self.__poll()
+            except Exception as msg:
+                syslog.syslog(syslog.LOG_ERR, '[vrrp state] poll failed: %s' % msg)
+                self.vty.close()
+            self.refresh_event.wait(self.POLL_INTERVAL_SEC)
+            self.refresh_event.clear()
+        self.vty.close()
+        syslog.syslog(syslog.LOG_INFO, '[vrrp state] state sync stopped')
+
+
 main_loop = True
+vrrp_state_sync = None
+
+
+def vrrp_state_refresh():
+    if vrrp_state_sync is not None:
+        vrrp_state_sync.request_refresh()
 
 def sig_handler(signum, frame):
     global main_loop
@@ -4310,18 +4472,26 @@ def sig_handler(signum, frame):
     main_loop = False
 
 def main():
-    global bgpd_client
+    global bgpd_client, vrrp_state_sync
     for sig_num in [signal.SIGTERM, signal.SIGINT]:
         signal.signal(sig_num, sig_handler)
     syslog.syslog(syslog.LOG_DEBUG, 'entering BGP configuration daemon')
     bgpd_client = BgpdClientMgr()
     bgpd_client.start()
+    try:
+        vrrp_state_sync = VrrpStateSync()
+        vrrp_state_sync.start()
+    except Exception as msg:
+        syslog.syslog(syslog.LOG_ERR, 'failed to start VRRP state sync: %s' % msg)
+        vrrp_state_sync = None
     daemon = BGPConfigDaemon()
     daemon.start()
     while main_loop:
         signal.pause()
     syslog.syslog(syslog.LOG_DEBUG, 'leaving BGP configuration daemon')
     bgpd_client.shutdown()
+    if vrrp_state_sync is not None:
+        vrrp_state_sync.shutdown()
     daemon.stop()
 
 if __name__ == "__main__":
