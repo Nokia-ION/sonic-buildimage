@@ -32,6 +32,10 @@
         "desc": "Tacplus global configuration with a non existent port in TACPLUS table.",
         "eStrKey": "InvalidValue"
     },
+    "TACPLUS_INVALID_DSCP_TEST": {
+        "desc": "Tacplus global configuration with an out of range dscp value in TACPLUS table.",
+        "eStr": "TACACS DSCP must be 0..63"
+    },
     "TACPLUS_SERVER_TEST" : {
         "desc": "Tacplus server configuration in TACPLUS_SERVER table."
     },
