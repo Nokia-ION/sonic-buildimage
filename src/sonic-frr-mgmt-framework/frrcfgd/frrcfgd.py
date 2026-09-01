@@ -2568,6 +2568,28 @@ class BGPConfigDaemon:
         for table, hdlr in self.table_handler_list:
             self.config_db.subscribe(table, hdlr)
 
+    def replay_vrrp_tables(self):
+        replay_handlers = [
+            ('VRRP', self.vrrp_handler),
+            ('VRRP6', self.vrrp6_handler),
+            ('VRRP_TRACK', self.vrrp_track_handler),
+            ('VRRP6_TRACK', self.vrrp6_track_handler),
+        ]
+        for table, hdlr in replay_handlers:
+            table_data = self.config_db.get_table(table)
+            if not table_data:
+                syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](replay) no rows in {}'.format(table))
+                continue
+            syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](replay) replaying {} rows from {}'.format(len(table_data), table))
+            for key, data in table_data.items():
+                row = self.config_db.serialize_key(key)
+                try:
+                    hdlr(table, row, data)
+                    syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](replay) applied {} {}'.format(table, row))
+                except Exception as err:
+                    syslog.syslog(syslog.LOG_ERR, '[vrrp cfgd](replay) failed {} {}: {}'.format(table, row, err))
+                    logging.exception(err)
+
     @staticmethod
     def __run_command(table, command, daemons = None):
         return g_run_command(table, command, True, daemons)
@@ -2636,7 +2658,7 @@ class BGPConfigDaemon:
 
         command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd]
         for param in data:
-            if param == 'vip':
+            if param == 'vip' or param == 'vip@':
                 for vip in as_list(data[param]):
                     vip = vip.strip()
                     if not vip:
@@ -2692,7 +2714,7 @@ class BGPConfigDaemon:
 
         command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd]
         for param in data:
-            if param == 'vip':
+            if param == 'vip' or param == 'vip@':
                 for vip in as_list(data[param]):
                     vip = vip.strip()
                     if not vip:
@@ -4304,6 +4326,7 @@ class BGPConfigDaemon:
 
     def start(self):
         self.subscribe_all()
+        self.replay_vrrp_tables()
         self.config_db.listen()
     def stop(self):
         self.config_db.stop_listen()
