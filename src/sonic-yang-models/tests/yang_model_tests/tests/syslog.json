@@ -87,6 +87,21 @@
         "desc": "Invalid syslog server protocol",
         "eStrKey": "InvalidValue"
     },
+    "SYSLOG_SERVER_PROTOCOL_TLS": {
+        "desc": "Valid syslog server TLS protocol with tls_profile_id"
+    },
+    "SYSLOG_SERVER_PROTOCOL_TLS_MISSING_PROFILE": {
+        "desc": "TLS protocol without tls_profile_id must be rejected",
+        "eStr": ["tls_profile_id is required when protocol is tls"]
+    },
+    "SYSLOG_SERVER_TLS_PROFILE_GNXI": {
+        "desc": "gnxi cannot be used as a syslog TLS profile",
+        "eStr": ["gnxi is the gNMI listener profile and cannot be used for syslog"]
+    },
+    "SYSLOG_SERVER_TLS_PROFILE_INVALID": {
+        "desc": "tls_profile_id must match [A-Za-z0-9._-]+",
+        "eStrKey": "Pattern"
+    },
     "SYSLOG_SERVER_SEVERITY": {
         "desc": "Syslog server valid severity"
     },

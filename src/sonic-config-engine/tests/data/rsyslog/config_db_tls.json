@@ -1,0 +1,29 @@
+{
+    "SYSLOG_CONFIG": {
+        "GLOBAL": {
+            "format": "standard",
+            "severity": "notice"
+        }
+    },
+    "SYSLOG_SERVER": {
+        "10.0.0.5": {
+            "protocol": "tls",
+            "tls_profile_id": "siem-east",
+            "port": "6514"
+        },
+        "10.0.0.6": {
+            "protocol": "tls",
+            "tls_profile_id": "siem-west",
+            "port": "6514"
+        },
+        "10.0.0.7": {
+            "protocol": "udp",
+            "port": "514"
+        },
+        "10.0.0.8": {
+            "protocol": "tls",
+            "tls_profile_id": "missing-profile",
+            "port": "6514"
+        }
+    }
+}

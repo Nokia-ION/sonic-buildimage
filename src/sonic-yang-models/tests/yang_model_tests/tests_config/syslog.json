@@ -327,6 +327,58 @@
             }
         }
     },
+    "SYSLOG_SERVER_PROTOCOL_TLS" : {
+        "sonic-syslog:sonic-syslog": {
+            "sonic-syslog:SYSLOG_SERVER": {
+                "SYSLOG_SERVER_LIST": [
+                    {
+                        "server_address": "10.0.0.5",
+                        "protocol": "tls",
+                        "tls_profile_id": "siem-east",
+                        "port": "6514"
+                    }
+                ]
+            }
+        }
+    },
+    "SYSLOG_SERVER_PROTOCOL_TLS_MISSING_PROFILE" : {
+        "sonic-syslog:sonic-syslog": {
+            "sonic-syslog:SYSLOG_SERVER": {
+                "SYSLOG_SERVER_LIST": [
+                    {
+                        "server_address": "10.0.0.5",
+                        "protocol": "tls"
+                    }
+                ]
+            }
+        }
+    },
+    "SYSLOG_SERVER_TLS_PROFILE_GNXI" : {
+        "sonic-syslog:sonic-syslog": {
+            "sonic-syslog:SYSLOG_SERVER": {
+                "SYSLOG_SERVER_LIST": [
+                    {
+                        "server_address": "10.0.0.5",
+                        "protocol": "tls",
+                        "tls_profile_id": "gnxi"
+                    }
+                ]
+            }
+        }
+    },
+    "SYSLOG_SERVER_TLS_PROFILE_INVALID" : {
+        "sonic-syslog:sonic-syslog": {
+            "sonic-syslog:SYSLOG_SERVER": {
+                "SYSLOG_SERVER_LIST": [
+                    {
+                        "server_address": "10.0.0.5",
+                        "protocol": "tls",
+                        "tls_profile_id": "bad/id"
+                    }
+                ]
+            }
+        }
+    },
     "SYSLOG_SERVER_SEVERITY" : {
         "sonic-syslog:sonic-syslog": {
             "sonic-syslog:SYSLOG_SERVER": {
