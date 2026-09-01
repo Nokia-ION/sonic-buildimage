@@ -53,6 +53,26 @@ if [ -n "$syslog_src_intf" ]; then
     syslog_src_ip6=$(ip -j -6 addr list "$syslog_src_intf" scope global 2>/dev/null | jq -r -M '[.[].addr_info[]?.local][0] // empty')
 fi
 
+# Profiles whose PEMs host-services copied to /etc/sonic/ssl-certs/<id>/.
+# The Jinja template only emits TLS omfwd for ids listed here so missing certs
+# never fall back to cleartext.
+ssl_profiles_json="{"
+tls_first=1
+if [ -d /etc/sonic/ssl-certs ]; then
+    for d in /etc/sonic/ssl-certs/*/; do
+        [ -d "$d" ] || continue
+        id=$(basename "$d")
+        if [ -f "${d}ca-bundle.pem" ] && [ -f "${d}cert.pem" ] && [ -f "${d}key.pem" ]; then
+            if [ "$tls_first" -eq 0 ]; then
+                ssl_profiles_json="${ssl_profiles_json},"
+            fi
+            ssl_profiles_json="${ssl_profiles_json}\"${id}\": true"
+            tls_first=0
+        fi
+    done
+fi
+ssl_profiles_json="${ssl_profiles_json}}"
+
 # Generate temporary config to validate output before overwriting
 # /etc/rsyslog.conf
 TMPFILE=$(mktemp /tmp/rsyslog.conf.XXXXXX)
@@ -73,7 +93,8 @@ json_args=$(jq -n \
     --arg syslog_counter "$syslog_counter" \
     --arg syslog_src_ip "$syslog_src_ip" \
     --arg syslog_src_ip6 "$syslog_src_ip6" \
-    '{udp_server_ip: $udp_server_ip, docker0_ip: $docker0_ip, forward_with_osversion: $forward_with_osversion, os_version: $os_version, syslog_counter: $syslog_counter, syslog_src_ip: $syslog_src_ip, syslog_src_ip6: $syslog_src_ip6}')
+    --argjson ssl_profiles "$ssl_profiles_json" \
+    '{udp_server_ip: $udp_server_ip, docker0_ip: $docker0_ip, forward_with_osversion: $forward_with_osversion, os_version: $os_version, syslog_counter: $syslog_counter, syslog_src_ip: $syslog_src_ip, syslog_src_ip6: $syslog_src_ip6, ssl_profiles: $ssl_profiles}')
 
 sonic-cfggen -d -t /usr/share/sonic/templates/rsyslog.conf.j2 \
     -a "$json_args" \

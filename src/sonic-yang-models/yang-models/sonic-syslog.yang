@@ -23,6 +23,10 @@ module sonic-syslog {
 
     description "Remote syslog server and logging configuration YANG module for SONiC OS.";
 
+    revision 2026-08-21 {
+        description "Add TLS protocol and per-server tls_profile_id for remote syslog.";
+    }
+
     revision 2022-04-18 {
         description "Initial revision.";
     }
@@ -58,10 +62,13 @@ module sonic-syslog {
     }
 
     typedef rsyslog-protocol {
-        description "The protocol to send logs to remote server";
+        description
+            "The protocol to send logs to a remote server.
+             tls implies TCP plus the rsyslog ossl stream driver.";
         type enumeration {
             enum tcp;
             enum udp;
+            enum tls;
         }
     }
 
@@ -141,6 +148,32 @@ module sonic-syslog {
                 leaf protocol {
                     description "The protocol to send logs to remote server";
                     type rsyslog-protocol;
+                    must "(current() != 'tls') or ../tls_profile_id" {
+                        error-message "tls_profile_id is required when protocol is tls";
+                    }
+                }
+
+                leaf transport_security {
+                    description
+                        "When true, forward this server over TLS (same as protocol tls).
+                         Kept for OpenConfig transport-security mapping.";
+                    type boolean;
+                    must "(current() != true) or ../tls_profile_id" {
+                        error-message "tls_profile_id is required when transport_security is true";
+                    }
+                }
+
+                leaf tls_profile_id {
+                    description
+                        "gNSI Certz SSL profile id whose PEMs were installed under
+                         /etc/sonic/ssl-certs/<id>/. Required when protocol is tls.
+                         Must not be gnxi (the gNMI listener profile).";
+                    type string {
+                        pattern '[A-Za-z0-9._-]+';
+                    }
+                    must "current() != 'gnxi'" {
+                        error-message "gnxi is the gNMI listener profile and cannot be used for syslog";
+                    }
                 }
 
                 leaf severity {
