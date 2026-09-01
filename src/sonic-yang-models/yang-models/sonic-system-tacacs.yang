@@ -195,6 +195,18 @@ module sonic-system-tacacs {
                     default false;
                     description "Enable adding validated SSH_CLIENT_TRACEID values as the TACACS+ traceid command authorization attribute.";
                 }
+
+                leaf dscp {
+                    type uint8 {
+                        range "0..63" {
+                            error-message "TACACS DSCP must be 0..63";
+                        }
+                    }
+                    description
+                        "DSCP value used to mark outgoing TACACS+ packets. Equivalent to
+                         EOS 'tacacs-server qos dscp'. Rendered by hostcfgd into iptables
+                         mangle rules on the traffic towards the configured TACACS+ servers.";
+                }
             }
         }
     }

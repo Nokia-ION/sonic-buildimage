@@ -23,7 +23,19 @@
                         "timeout": 5,
                         "passkey": "dellsonic",
                         "src_intf": "Ethernet0",
-                        "traceid_authorization": "True"
+                        "traceid_authorization": "True",
+                        "dscp": 32
+                }
+            }
+        }
+    },
+
+    "TACPLUS_INVALID_DSCP_TEST": {
+        "sonic-system-tacacs:sonic-system-tacacs": {
+            "sonic-system-tacacs:TACPLUS": {
+                "global": {
+                        "auth_type": "chap",
+                        "dscp": 64
                 }
             }
         }
