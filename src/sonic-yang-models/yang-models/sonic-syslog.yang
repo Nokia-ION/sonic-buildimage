@@ -189,6 +189,14 @@ module sonic-syslog {
                     description "Minimum severity level for local syslog messages.";
                 }
 
+                leaf src_intf {
+                    type string;
+                    description
+                        "Global source interface (e.g. Loopback0) whose IP address is
+                         used as the source address for remote syslog forwarding.
+                         Equivalent to EOS 'logging source-interface'.";
+                }
+
             }
             /* end of list SYSLOG_CONFIG_LIST */
         }
