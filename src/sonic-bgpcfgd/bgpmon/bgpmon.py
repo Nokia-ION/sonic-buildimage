@@ -37,11 +37,31 @@ import json
 import os
 import sys
 import syslog
+from collections import namedtuple
 from swsscommon import swsscommon
 import time
 from sonic_py_common.general import getstatusoutput_noshell
 
 PIPE_BATCH_MAX_COUNT = 50
+
+# One row's worth of work for the applied-config pipeline. 'fields' is the set
+# to write, or None to remove the row outright; 'removed' names the fields that
+# were published last time and have since gone away.
+#
+# The departed fields are carried explicitly because the alternative, rewriting
+# a changed row as a delete followed by a set, leaves the row briefly absent.
+# That is invisible to a GET but not to an on-change subscriber, which sees a
+# delete before every update, and it is what kept these tables on sampling.
+RowOp = namedtuple('RowOp', ['key', 'fields', 'removed'])
+
+
+# Fields that were published for a row last time and are not in the new set.
+# Ordered so that the command a caller builds from it is stable to compare.
+def departed_fields(previous, fields):
+    if not previous:
+        return ()
+    return tuple(sorted(set(previous) - set(fields)))
+
 
 APPLIED_TABLE = "BGP_NEIGH_APPLIED"
 # Single row carrying the time of the last successful applied-config scrape. A
@@ -299,8 +319,9 @@ class BgpStateGet:
 
         # FRR emits bgpTimerUpEstablishedEpoch only while the session is
         # currently Established, so the field disappears when the session drops.
-        # That is why this table is rewritten rather than merged: a stale uptime
-        # left behind on a down session would read as if the session were up.
+        # That is the case the explicit field removal in flush_applied_pipe
+        # exists for: a stale uptime left behind on a down session would read as
+        # if the session were up.
         epoch = peer_info.get('bgpTimerUpEstablishedEpoch')
         if epoch is not None:
             fields['last_established'] = str(epoch)
@@ -393,19 +414,32 @@ class BgpStateGet:
                 self.update_new_applied_states(vrf, vrf_dict)
         return True
 
-    # BGP_NEIGH_APPLIED and BGP_NEIGH_STATS rows are rewritten rather than
-    # merged, because a field that FRR stopped reporting has to disappear from
-    # the row and HSET alone cannot remove it: a peer removed from its peer
-    # group for the applied table, a session that dropped and so no longer has
-    # an established epoch for the stats table.
+    # A changed row is updated in place: the current fields are set, and any
+    # field FRR has stopped reporting is removed by name. A field does have to
+    # be able to disappear -- a peer taken out of its peer group for the applied
+    # table, a session that dropped and so has no established epoch for the
+    # stats table -- and HSET alone cannot do that, which is why this once
+    # deleted the row first. Deleting it made every value change a removal
+    # followed by a re-creation; naming the departed fields keeps the row
+    # present throughout, so a subscriber sees the change and not a delete.
     def flush_applied_pipe(self, ops):
-        for key, value in ops:
-            command = swsscommon.RedisCommand()
-            command.formatDEL(key)
-            self.pipe.push(command)
-            if value is not None:
+        for op in ops:
+            if op.fields is None:
                 command = swsscommon.RedisCommand()
-                command.formatHSET(key, value)
+                command.formatDEL(op.key)
+                self.pipe.push(command)
+                continue
+            # The set goes first so the row never reads as missing a value it
+            # still has. The two commands touch disjoint fields, since a
+            # departed field is by definition absent from the new set, so their
+            # order changes nothing about where the row ends up.
+            if op.fields:
+                command = swsscommon.RedisCommand()
+                command.formatHSET(op.key, op.fields)
+                self.pipe.push(command)
+            if op.removed:
+                command = swsscommon.RedisCommand()
+                command.formatHDEL(op.key, list(op.removed))
                 self.pipe.push(command)
 
         self.pipe.flush()
@@ -418,19 +452,21 @@ class BgpStateGet:
             # can change peer-as, peer-group or local-address while the session
             # stays Established, and gating on session state alone would leave
             # these values stale forever.
-            if self.applied_state.get(entry) != fields:
-                ops.append(("%s|%s|%s" % (APPLIED_TABLE, entry[0], entry[1]), fields))
+            previous = self.applied_state.get(entry)
+            if previous != fields:
+                ops.append(RowOp("%s|%s|%s" % (APPLIED_TABLE, entry[0], entry[1]),
+                                 fields, departed_fields(previous, fields)))
             if len(ops) > PIPE_BATCH_MAX_COUNT:
                 self.flush_applied_pipe(ops)
         # Drop rows for peers FRR no longer reports
         for entry in self.applied_state:
             if entry not in self.new_applied_state:
-                ops.append(("%s|%s|%s" % (APPLIED_TABLE, entry[0], entry[1]), None))
+                ops.append(RowOp("%s|%s|%s" % (APPLIED_TABLE, entry[0], entry[1]), None, ()))
             if len(ops) > PIPE_BATCH_MAX_COUNT:
                 self.flush_applied_pipe(ops)
         # Always refresh the marker, even when no row changed, since it is what
         # tells a consumer the absent fields are current rather than unsampled.
-        ops.append((APPLIED_META_KEY, {'last_sync': str(int(time.time()))}))
+        ops.append(RowOp(APPLIED_META_KEY, {'last_sync': str(int(time.time()))}, ()))
         self.flush_applied_pipe(ops)
 
         self.applied_state = {entry: dict(fields)
@@ -443,14 +479,16 @@ class BgpStateGet:
     def update_stats_states(self):
         ops = []
         for entry, fields in self.new_stats_state.items():
-            if self.stats_state.get(entry) != fields:
-                ops.append(("%s|%s|%s" % (STATS_TABLE, entry[0], entry[1]), fields))
+            previous = self.stats_state.get(entry)
+            if previous != fields:
+                ops.append(RowOp("%s|%s|%s" % (STATS_TABLE, entry[0], entry[1]),
+                                 fields, departed_fields(previous, fields)))
             if len(ops) > PIPE_BATCH_MAX_COUNT:
                 self.flush_applied_pipe(ops)
         # Drop rows for peers FRR no longer reports
         for entry in self.stats_state:
             if entry not in self.new_stats_state:
-                ops.append(("%s|%s|%s" % (STATS_TABLE, entry[0], entry[1]), None))
+                ops.append(RowOp("%s|%s|%s" % (STATS_TABLE, entry[0], entry[1]), None, ()))
             if len(ops) > PIPE_BATCH_MAX_COUNT:
                 self.flush_applied_pipe(ops)
         if len(ops) > 0:
@@ -467,13 +505,15 @@ class BgpStateGet:
     def update_af_stats_states(self):
         ops = []
         for entry, fields in self.new_af_stats_state.items():
-            if self.af_stats_state.get(entry) != fields:
-                ops.append(("%s|%s|%s|%s" % (AF_STATS_TABLE, entry[0], entry[1], entry[2]), fields))
+            previous = self.af_stats_state.get(entry)
+            if previous != fields:
+                ops.append(RowOp("%s|%s|%s|%s" % (AF_STATS_TABLE, entry[0], entry[1], entry[2]),
+                                 fields, departed_fields(previous, fields)))
             if len(ops) > PIPE_BATCH_MAX_COUNT:
                 self.flush_applied_pipe(ops)
         for entry in self.af_stats_state:
             if entry not in self.new_af_stats_state:
-                ops.append(("%s|%s|%s|%s" % (AF_STATS_TABLE, entry[0], entry[1], entry[2]), None))
+                ops.append(RowOp("%s|%s|%s|%s" % (AF_STATS_TABLE, entry[0], entry[1], entry[2]), None, ()))
             if len(ops) > PIPE_BATCH_MAX_COUNT:
                 self.flush_applied_pipe(ops)
         if len(ops) > 0:

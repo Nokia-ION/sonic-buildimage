@@ -133,6 +133,26 @@ def capture_applied_ops(bgp_mon):
     return captured
 
 
+def written_keys(captured):
+    """Every row the pass touched, in order."""
+    return [op.key for op in captured]
+
+
+def written_fields(captured):
+    """The fields written per row. A row being removed maps to None."""
+    return {op.key: op.fields for op in captured}
+
+
+def removed_fields(captured):
+    """The fields named for removal per row."""
+    return {op.key: op.removed for op in captured}
+
+
+def row_removed(captured, key):
+    """Whether the row itself was removed, as opposed to having fields cleared."""
+    return any(op.key == key and op.fields is None for op in captured)
+
+
 def scrape(bgp_mon, payload):
     with patch('bgpmon.bgpmon.getstatusoutput_noshell', return_value=(0, json.dumps(payload))):
         return bgp_mon.get_all_applied_states()
@@ -216,7 +236,7 @@ def test_applied_first_scrape_writes_row_and_marker(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, APPLIED_NEIGH_JSON)
     bgp_mon.update_applied_states()
-    keys = [key for key, _ in captured]
+    keys = written_keys(captured)
     assert "BGP_NEIGH_APPLIED|default|11.0.0.155" in keys
     assert bgpmon.bgpmon.APPLIED_META_KEY in keys
 
@@ -230,7 +250,7 @@ def test_applied_unchanged_scrape_writes_only_marker(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, APPLIED_NEIGH_JSON)
     bgp_mon.update_applied_states()
-    assert [key for key, _ in captured] == [bgpmon.bgpmon.APPLIED_META_KEY]
+    assert written_keys(captured) == [bgpmon.bgpmon.APPLIED_META_KEY]
 
 
 def test_applied_changed_value_is_rewritten(bgp_mon):
@@ -246,9 +266,106 @@ def test_applied_changed_value_is_rewritten(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, changed)
     bgp_mon.update_applied_states()
-    written = dict(captured)
+    written = written_fields(captured)
     assert "BGP_NEIGH_APPLIED|default|11.0.0.155" in written
     assert 'peer_group' not in written["BGP_NEIGH_APPLIED|default|11.0.0.155"]
+
+
+def test_applied_change_never_removes_the_row(bgp_mon):
+    """The point of the whole exercise. A value change has to reach STATE_DB as
+    an update of the existing row and nothing else, because a subscriber that
+    sees the row disappear first is told the neighbour went away."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_applied_states()
+
+    changed = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    changed["default"]["11.0.0.155"]["remoteAs"] = 65999
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, changed)
+    bgp_mon.update_applied_states()
+    key = "BGP_NEIGH_APPLIED|default|11.0.0.155"
+    assert written_fields(captured)[key]['peer_as'] == '65999'
+    assert not row_removed(captured, key)
+    assert removed_fields(captured)[key] == ()
+
+
+def test_applied_departed_field_is_named_rather_than_the_row_rewritten(bgp_mon):
+    """A peer taken out of its peer group loses the field. It is named for
+    removal, and the row survives."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_applied_states()
+
+    ungrouped = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    del ungrouped["default"]["11.0.0.155"]["peerGroup"]
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, ungrouped)
+    bgp_mon.update_applied_states()
+    key = "BGP_NEIGH_APPLIED|default|11.0.0.155"
+    assert removed_fields(captured)[key] == ('peer_group',)
+    assert not row_removed(captured, key)
+
+
+def test_applied_first_write_names_nothing_for_removal(bgp_mon):
+    """A row that was never published has no previous fields to retract."""
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, APPLIED_NEIGH_JSON)
+    bgp_mon.update_applied_states()
+    assert removed_fields(captured)["BGP_NEIGH_APPLIED|default|11.0.0.155"] == ()
+
+
+def test_departed_fields_reports_only_what_left():
+    """The helper the three update passes share."""
+    assert bgpmon.bgpmon.departed_fields({'a': '1', 'b': '2'}, {'a': '9'}) == ('b',)
+    assert bgpmon.bgpmon.departed_fields({'a': '1'}, {'a': '1', 'b': '2'}) == ()
+    assert bgpmon.bgpmon.departed_fields(None, {'a': '1'}) == ()
+    assert bgpmon.bgpmon.departed_fields({}, {'a': '1'}) == ()
+    # Ordered, so the command built from it is stable to compare.
+    assert bgpmon.bgpmon.departed_fields({'z': '1', 'a': '2'}, {}) == ('a', 'z')
+
+
+def flush_calls(bgp_mon, ops):
+    """The Redis commands one flush would issue, in order."""
+    with patch('bgpmon.bgpmon.swsscommon.RedisCommand') as mock_cmd:
+        bgp_mon.flush_applied_pipe(ops)
+        return [name for name, _, _ in mock_cmd.return_value.method_calls]
+
+
+def test_flush_updates_in_place_and_retracts_departed_fields(bgp_mon):
+    """A changed row is set and then has its departed fields cleared. No DEL,
+    which is what an on-change subscriber would have reported as a removal."""
+    op = bgpmon.bgpmon.RowOp("BGP_NEIGH_APPLIED|default|10.0.0.1", {'peer_as': '65001'}, ('peer_group',))
+    assert flush_calls(bgp_mon, [op]) == ['formatHSET', 'formatHDEL']
+
+
+def test_flush_omits_the_retraction_when_nothing_departed(bgp_mon):
+    """The common case costs one command, as it did before."""
+    op = bgpmon.bgpmon.RowOp("BGP_NEIGH_APPLIED|default|10.0.0.1", {'peer_as': '65001'}, ())
+    assert flush_calls(bgp_mon, [op]) == ['formatHSET']
+
+
+def test_flush_removes_the_row_when_there_are_no_fields(bgp_mon):
+    """A peer FRR stopped reporting is still a whole-row delete."""
+    op = bgpmon.bgpmon.RowOp("BGP_NEIGH_APPLIED|default|10.0.0.1", None, ())
+    assert flush_calls(bgp_mon, [op]) == ['formatDEL']
+
+
+def test_flush_does_not_set_an_empty_field_set(bgp_mon):
+    """HSET needs at least one pair, so a row left with nothing to write is
+    reduced to the retraction alone."""
+    op = bgpmon.bgpmon.RowOp("BGP_NEIGH_STATS|default|10.0.0.1", {}, ('last_established',))
+    assert flush_calls(bgp_mon, [op]) == ['formatHDEL']
+
+
+def test_flush_clears_the_ops_list(bgp_mon):
+    """The batching logic relies on the list being emptied in place."""
+    ops = [bgpmon.bgpmon.RowOp("T|k", {'a': '1'}, ())]
+    with patch('bgpmon.bgpmon.swsscommon.RedisCommand'):
+        bgp_mon.flush_applied_pipe(ops)
+    assert ops == []
 
 
 def test_applied_stale_peer_is_deleted(bgp_mon):
@@ -260,7 +377,7 @@ def test_applied_stale_peer_is_deleted(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, {"default": {"vrfId": 0, "vrfName": "default"}})
     bgp_mon.update_applied_states()
-    assert ("BGP_NEIGH_APPLIED|default|11.0.0.155", None) in captured
+    assert row_removed(captured, "BGP_NEIGH_APPLIED|default|11.0.0.155")
 
 
 @patch('bgpmon.bgpmon.getstatusoutput_noshell', return_value=(1, ""))
@@ -363,7 +480,7 @@ def test_stats_first_scrape_writes_row(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, APPLIED_NEIGH_JSON)
     bgp_mon.update_stats_states()
-    assert "BGP_NEIGH_STATS|default|11.0.0.155" in [key for key, _ in captured]
+    assert "BGP_NEIGH_STATS|default|11.0.0.155" in written_keys(captured)
 
 
 def test_stats_unchanged_scrape_writes_nothing(bgp_mon):
@@ -391,14 +508,14 @@ def test_stats_changed_counter_is_rewritten(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, changed)
     bgp_mon.update_stats_states()
-    written = dict(captured)
+    written = written_fields(captured)
     assert written["BGP_NEIGH_STATS|default|11.0.0.155"]['updates_received'] == '42'
 
 
 def test_stats_row_is_republished_without_the_field_that_vanished(bgp_mon):
-    """The row is rewritten rather than merged: when the session drops and FRR
-    stops reporting the established epoch, the field has to leave the row, which
-    an HSET on its own could not do."""
+    """When the session drops and FRR stops reporting the established epoch, the
+    field has to leave the row. An HSET on its own could not do that, so the
+    field is named for removal rather than the row being rewritten."""
     capture_applied_ops(bgp_mon)
     scrape(bgp_mon, APPLIED_NEIGH_JSON)
     bgp_mon.update_stats_states()
@@ -409,8 +526,10 @@ def test_stats_row_is_republished_without_the_field_that_vanished(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, down)
     bgp_mon.update_stats_states()
-    written = dict(captured)
-    assert 'last_established' not in written["BGP_NEIGH_STATS|default|11.0.0.155"]
+    key = "BGP_NEIGH_STATS|default|11.0.0.155"
+    assert 'last_established' not in written_fields(captured)[key]
+    assert removed_fields(captured)[key] == ('last_established',)
+    assert not row_removed(captured, key)
 
 
 def test_stats_stale_peer_is_deleted(bgp_mon):
@@ -422,7 +541,7 @@ def test_stats_stale_peer_is_deleted(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, {"default": {"vrfId": 0, "vrfName": "default"}})
     bgp_mon.update_stats_states()
-    assert ("BGP_NEIGH_STATS|default|11.0.0.155", None) in captured
+    assert row_removed(captured, "BGP_NEIGH_STATS|default|11.0.0.155")
 
 
 def test_stats_multiple_vrfs_are_keyed_separately(bgp_mon):
@@ -523,7 +642,7 @@ def test_af_stats_first_scrape_writes_a_row_per_family(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, APPLIED_NEIGH_JSON)
     bgp_mon.update_af_stats_states()
-    keys = [key for key, _ in captured]
+    keys = written_keys(captured)
     assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast" in keys
     assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast" in keys
 
@@ -554,7 +673,7 @@ def test_af_stats_changed_counter_rewrites_only_its_family(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, changed)
     bgp_mon.update_af_stats_states()
-    written = dict(captured)
+    written = written_fields(captured)
     assert written["BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast"]['prefixes_received'] == '9'
     assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast" not in written
 
@@ -572,7 +691,7 @@ def test_af_stats_row_is_republished_without_the_field_that_vanished(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, dropped)
     bgp_mon.update_af_stats_states()
-    written = dict(captured)
+    written = written_fields(captured)
     assert 'prefixes_sent' not in written["BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast"]
 
 
@@ -590,7 +709,7 @@ def test_af_stats_deactivated_family_row_is_deleted(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, deactivated)
     bgp_mon.update_af_stats_states()
-    assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast", None) in captured
+    assert row_removed(captured, "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast")
     assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast", None) not in captured
 
 
@@ -603,8 +722,8 @@ def test_af_stats_stale_peer_deletes_every_family_row(bgp_mon):
     captured = capture_applied_ops(bgp_mon)
     scrape(bgp_mon, {"default": {"vrfId": 0, "vrfName": "default"}})
     bgp_mon.update_af_stats_states()
-    assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast", None) in captured
-    assert ("BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast", None) in captured
+    assert row_removed(captured, "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast")
+    assert row_removed(captured, "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast")
 
 
 def test_af_stats_multiple_vrfs_are_keyed_separately(bgp_mon):
