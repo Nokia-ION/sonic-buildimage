@@ -150,7 +150,8 @@ class TestApplyGlobalLldpConfig(TestCase):
         expected_cmds = lldpmgrd.build_global_lldp_cli_commands(cfg)
 
         with mock.patch.object(lldpmgrd, "run_cmd", return_value=(0, "")) as run_cmd:
-            mgr.apply_global_lldp_config(cfg)
+            with mock.patch.object(mgr, "apply_management_pattern"):
+                mgr.apply_global_lldp_config(cfg)
 
         self.assertEqual(run_cmd.call_count, len(expected_cmds))
         actual_cmds = [call.args[1] for call in run_cmd.call_args_list]
@@ -162,9 +163,17 @@ class TestApplyGlobalLldpConfig(TestCase):
 
         with mock.patch.object(lldpmgrd, "run_cmd", return_value=(1, "error")):
             with mock.patch.object(mgr, "log_warning") as log_warning:
-                mgr.apply_global_lldp_config(cfg)
+                with mock.patch.object(mgr, "apply_management_pattern"):
+                    mgr.apply_global_lldp_config(cfg)
 
         self.assertTrue(log_warning.called)
+
+    def test_applies_management_pattern_after_global_commands(self):
+        mgr = self._make_mgr()
+        with mock.patch.object(lldpmgrd, "run_cmd", return_value=(0, "")):
+            with mock.patch.object(mgr, "apply_management_pattern") as apply_pat:
+                mgr.apply_global_lldp_config({"hello_time": "20"})
+        apply_pat.assert_called_once()
 
 
 class TestLldpProcessLldpGlobalEvent(TestCase):
@@ -195,3 +204,59 @@ class TestLldpProcessLldpGlobalEvent(TestCase):
             mgr.lldp_process_lldp_global_event("GET", [])
 
         apply_cfg.assert_not_called()
+
+
+class TestCustomTlvCliCommands(TestCase):
+    def test_hex_bytes_for_lldpcli(self):
+        self.assertEqual(lldpmgrd.hex_bytes_for_lldpcli("00:90:69"), "00,90,69")
+        self.assertEqual(lldpmgrd.hex_bytes_for_lldpcli("009069"), "00,90,69")
+        self.assertEqual(lldpmgrd.hex_bytes_for_lldpcli(""), None)
+        self.assertEqual(lldpmgrd.hex_bytes_for_lldpcli("zzz"), None)
+
+    def test_rebuild_clears_then_adds(self):
+        cmds = lldpmgrd.build_custom_tlv_cli_commands([
+            {"oui": "00:90:69", "oui_subtype": "1", "value": "aabb"},
+            {"oui": "00,11,22", "oui_subtype": "2"},
+        ])
+        self.assertEqual(cmds[0], ["lldpcli", "unconfigure", "lldp", "custom-tlv"])
+        self.assertEqual(cmds[1], [
+            "lldpcli", "configure", "lldp", "custom-tlv", "add",
+            "oui", "00,90,69", "subtype", "1", "oui-info", "aa,bb",
+        ])
+        self.assertEqual(cmds[2], [
+            "lldpcli", "configure", "lldp", "custom-tlv", "add",
+            "oui", "00,11,22", "subtype", "2",
+        ])
+
+    def test_skips_incomplete_entries(self):
+        cmds = lldpmgrd.build_custom_tlv_cli_commands([{"oui": "00:90:69"}])
+        self.assertEqual(cmds, [["lldpcli", "unconfigure", "lldp", "custom-tlv"]])
+
+
+class TestApplyManagementPattern(TestCase):
+    def _make_mgr(self):
+        return lldpmgrd.LldpManager("test")
+
+    def test_uses_configured_interface(self):
+        mgr = self._make_mgr()
+        mgr.lldp_global_cfg = {"management_interface": "eth0"}
+        with mock.patch.object(mgr, "update_mgmt_addr") as update:
+            with mock.patch.object(mgr, "lldp_get_mgmt_ip") as get_ip:
+                mgr.apply_management_pattern()
+        update.assert_called_once_with("eth0")
+        get_ip.assert_not_called()
+
+    def test_falls_back_to_mgmt_ip(self):
+        mgr = self._make_mgr()
+        mgr.lldp_global_cfg = {}
+        with mock.patch.object(mgr, "lldp_get_mgmt_ip", return_value="10.0.0.1"):
+            with mock.patch.object(mgr, "update_mgmt_addr") as update:
+                mgr.apply_management_pattern()
+        update.assert_called_once_with("10.0.0.1")
+
+    def test_mgmt_ip_change_ignored_when_interface_configured(self):
+        mgr = self._make_mgr()
+        mgr.lldp_global_cfg = {"management_interface": "eth0"}
+        with mock.patch.object(mgr, "update_mgmt_addr") as update:
+            mgr.lldp_process_mgmt_info_change("SET", {}, "eth0|10.0.0.1/24")
+        update.assert_not_called()
