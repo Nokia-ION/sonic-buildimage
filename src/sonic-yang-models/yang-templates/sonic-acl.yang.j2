@@ -74,6 +74,30 @@ module sonic-acl {
 					type stypes:packet_action;
 				}
 
+				leaf SET_TC {
+					description "Traffic class value to assign to matching packets";
+					type uint8 {
+						range 0..7;
+					}
+				}
+				/* Validating 'SET_TC' is supported by the ACL table type and stage */
+				must "not(SET_TC) or " +
+					"(/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:stage = 'ingress' or " +
+					"/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:stage = 'INGRESS') and (" +
+					"boolean(/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:type = 'L3' or " +
+					"/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:type = 'L3V6' or " +
+					"/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:type = 'L3V4V6') or " +
+					"count(/acl:sonic-acl/acl:ACL_TABLE_TYPE/acl:ACL_TABLE_TYPE_LIST" +
+					"[acl:ACL_TABLE_TYPE_NAME = " +
+					"/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:type]" +
+					"/acl:ACTIONS[. = 'SET_TC']) > 0)";
+
 				/* Validating 'PACKET_ACTION' exist if ACL type is 'CTRLPLANE' */
 				must "(not(../../ACL_TABLE/ACL_TABLE_LIST[ACL_TABLE_NAME=current()/ACL_TABLE_NAME]/type = 'CTRLPLANE')) or (boolean(PACKET_ACTION))";
 
