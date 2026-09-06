@@ -284,5 +284,26 @@
         "eStr": [
             "DST_IPV6 must be a plain host address"
         ]
+    },
+    "ACL_RULE_VALID_SET_TC_L3_INGRESS": {
+        "desc": "Configure ACL_RULE with SET_TC on an ingress L3 table."
+    },
+    "ACL_RULE_INVALID_SET_TC_L2_TYPE": {
+        "desc": "Configure ACL_RULE with SET_TC on an L2 table (should trigger must error).",
+        "eStrKey": "Must",
+        "eStr": ["SET_TC"]
+    },
+    "ACL_RULE_INVALID_SET_TC_EGRESS_L3": {
+        "desc": "Configure ACL_RULE with SET_TC on an egress L3 table (should trigger must error).",
+        "eStrKey": "Must",
+        "eStr": ["SET_TC"]
+    },
+    "ACL_RULE_INVALID_SET_TC_RANGE": {
+        "desc": "Configure ACL_RULE with out-of-range SET_TC value.",
+        "eStrKey": "Range",
+        "eStr": ["SET_TC"]
+    },
+    "ACL_RULE_VALID_SET_TC_CUSTOM_TYPE": {
+        "desc": "Configure ACL_RULE with SET_TC on a custom table type that supports it."
     }
 }

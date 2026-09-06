@@ -1,0 +1,267 @@
+diff --git a/orchagent/aclorch.cpp b/orchagent/aclorch.cpp
+index f3418d2a..49af94ca 100755
+--- a/orchagent/aclorch.cpp
++++ b/orchagent/aclorch.cpp
+@@ -115,7 +115,8 @@ static acl_rule_attr_lookup_t aclL3ActionLookup =
+     { ACTION_REDIRECT_ACTION,                  SAI_ACL_ENTRY_ATTR_ACTION_REDIRECT },
+     { ACTION_DO_NOT_NAT_ACTION,                SAI_ACL_ENTRY_ATTR_ACTION_NO_NAT },
+     { ACTION_DISABLE_TRIM,                     SAI_ACL_ENTRY_ATTR_ACTION_PACKET_TRIM_DISABLE },
+-    { ACTION_POLICER_ACTION,                   SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER }
++    { ACTION_POLICER_ACTION,                   SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER },
++    { ACTION_SET_TC,                           SAI_ACL_ENTRY_ATTR_ACTION_SET_TC }
+ };
+ 
+ static acl_rule_attr_lookup_t aclInnerActionLookup =
+@@ -207,7 +208,8 @@ static acl_table_action_list_lookup_t defaultAclActionList =
+                 ACL_STAGE_INGRESS,
+                 {
+                     SAI_ACL_ACTION_TYPE_PACKET_ACTION,
+-                    SAI_ACL_ACTION_TYPE_REDIRECT
++                    SAI_ACL_ACTION_TYPE_REDIRECT,
++                    SAI_ACL_ACTION_TYPE_SET_TC
+                 }
+             },
+             {
+@@ -227,7 +229,8 @@ static acl_table_action_list_lookup_t defaultAclActionList =
+                 ACL_STAGE_INGRESS,
+                 {
+                     SAI_ACL_ACTION_TYPE_PACKET_ACTION,
+-                    SAI_ACL_ACTION_TYPE_REDIRECT
++                    SAI_ACL_ACTION_TYPE_REDIRECT,
++                    SAI_ACL_ACTION_TYPE_SET_TC
+                 }
+             },
+             {
+@@ -247,7 +250,8 @@ static acl_table_action_list_lookup_t defaultAclActionList =
+                 ACL_STAGE_INGRESS,
+                 {
+                     SAI_ACL_ACTION_TYPE_PACKET_ACTION,
+-                    SAI_ACL_ACTION_TYPE_REDIRECT
++                    SAI_ACL_ACTION_TYPE_REDIRECT,
++                    SAI_ACL_ACTION_TYPE_SET_TC
+                 }
+             },
+             {
+@@ -2240,6 +2244,24 @@ bool AclRulePacket::validateAddAction(string attr_name, string _attr_value)
+         actionData.parameter.oid = policer_oid;
+         m_policerName = _attr_value;
+     }
++    else if (attr_name == ACTION_SET_TC)
++    {
++        if (_attr_value.empty())
++        {
++            SWSS_LOG_ERROR("Empty traffic class value for action %s in rule %s", attr_name.c_str(), m_id.c_str());
++            return false;
++        }
++
++        uint8_t tc = to_uint<uint8_t>(_attr_value);
++        if (tc > 7)
++        {
++            SWSS_LOG_ERROR("Invalid traffic class value %u for action %s in rule %s (valid range 0-7)",
++                           tc, attr_name.c_str(), m_id.c_str());
++            return false;
++        }
++
++        actionData.parameter.u8 = tc;
++    }
+     else
+     {
+         return false;
+@@ -2356,16 +2378,19 @@ bool AclRulePacket::validate()
+         return false;
+     }
+ 
+-    size_t nonPolicerActions = 0;
++    size_t primaryActions = 0;
+     for (const auto& action : m_actions)
+     {
+-        if (action.first != SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER)
++        // SET_POLICER and SET_TC are supplementary; they compose with a primary
++        // action such as PACKET_ACTION on the same ACL entry.
++        if (action.first != SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER &&
++            action.first != SAI_ACL_ENTRY_ATTR_ACTION_SET_TC)
+         {
+-            nonPolicerActions++;
++            primaryActions++;
+         }
+     }
+ 
+-    if (nonPolicerActions > 1)
++    if (primaryActions > 1)
+     {
+         return false;
+     }
+diff --git a/orchagent/aclorch.h b/orchagent/aclorch.h
+index 6ca18aa3..1a426798 100755
+--- a/orchagent/aclorch.h
++++ b/orchagent/aclorch.h
+@@ -85,6 +85,7 @@
+ #define ACTION_DSCP                         "DSCP_ACTION"
+ #define ACTION_INNER_SRC_MAC_REWRITE_ACTION "INNER_SRC_MAC_REWRITE_ACTION"
+ #define ACTION_POLICER_ACTION               "POLICER_ACTION"
++#define ACTION_SET_TC                       "SET_TC"
+ 
+ #define PACKET_ACTION_FORWARD      "FORWARD"
+ #define PACKET_ACTION_DROP         "DROP"
+diff --git a/tests/mock_tests/aclorch_ut.cpp b/tests/mock_tests/aclorch_ut.cpp
+index d44f4a1f..7ca9504f 100755
+--- a/tests/mock_tests/aclorch_ut.cpp
++++ b/tests/mock_tests/aclorch_ut.cpp
+@@ -234,6 +234,11 @@ namespace aclorch_test
+         {
+             return Portal::AclOrchInternal::getAclTables(m_aclOrch);
+         }
++
++        bool isAclActionSupported(acl_stage_type_t stage, sai_acl_action_type_t action) const
++        {
++            return m_aclOrch->isAclActionSupported(stage, action);
++        }
+     };
+ 
+     struct AclOrchTest : public AclTest
+@@ -1336,6 +1341,145 @@ namespace aclorch_test
+         }
+     }
+ 
++    // Built-in L3 tables advertise SET_TC on ingress when the platform supports it.
++    TEST_F(AclOrchTest, L3Acl_Set_Tc_Action)
++    {
++        const string aclTableName = "L3_SET_TC_TABLE";
++        const string aclRuleName  = "L3_SET_TC_RULE";
++
++        auto orch = createAclOrch();
++
++        if (!orch->isAclActionSupported(ACL_STAGE_INGRESS, SAI_ACL_ACTION_TYPE_SET_TC))
++        {
++            GTEST_SKIP() << "SAI_ACL_ACTION_TYPE_SET_TC not supported by test SAI";
++        }
++
++        orch->doAclTableTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName, SET_COMMAND,
++                    { { ACL_TABLE_DESCRIPTION, "L3 set-tc table" },
++                      { ACL_TABLE_TYPE, TABLE_TYPE_L3 },
++                      { ACL_TABLE_STAGE, STAGE_INGRESS },
++                      { ACL_TABLE_PORTS, "1,2" } } } }));
++        ASSERT_TRUE(orch->getAclTable(aclTableName));
++
++        orch->doAclRuleTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName + "|" + aclRuleName, SET_COMMAND,
++                    { { MATCH_SRC_IP, "10.0.0.1/32" },
++                      { MATCH_IP_PROTOCOL, "6" },
++                      { MATCH_L4_DST_PORT, "443" },
++                      { ACTION_PACKET_ACTION, PACKET_ACTION_FORWARD },
++                      { ACTION_SET_TC, "4" } } } }));
++
++        auto rule = orch->getAclRule(aclTableName, aclRuleName);
++        ASSERT_TRUE(rule);
++        const auto &actions = Portal::AclRuleInternal::getActions(rule);
++        auto setTcIt = actions.find(SAI_ACL_ENTRY_ATTR_ACTION_SET_TC);
++        ASSERT_NE(setTcIt, actions.end());
++        EXPECT_EQ(setTcIt->second.getSaiAttr().value.aclaction.parameter.u8, 4);
++        ASSERT_NE(actions.find(SAI_ACL_ENTRY_ATTR_ACTION_PACKET_ACTION), actions.end());
++    }
++
++    // SET_TC assigns a traffic class on matching packets when the platform
++    // advertises SAI_ACL_ACTION_TYPE_SET_TC and the table type includes SET_TC.
++    TEST_F(AclOrchTest, AclRule_Set_Tc_Action)
++    {
++        const string aclTableTypeName = "TEST_SET_TC_TYPE";
++        const string aclTableName     = "TEST_SET_TC_TABLE";
++        const string aclRuleName      = "TEST_SET_TC_RULE";
++
++        auto orch = createAclOrch();
++
++        if (!orch->isAclActionSupported(ACL_STAGE_INGRESS, SAI_ACL_ACTION_TYPE_SET_TC))
++        {
++            GTEST_SKIP() << "SAI_ACL_ACTION_TYPE_SET_TC not supported by test SAI";
++        }
++
++        orch->doAclTableTypeTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableTypeName, SET_COMMAND,
++                    { { ACL_TABLE_TYPE_MATCHES, MATCH_SRC_IP },
++                      { ACL_TABLE_TYPE_ACTIONS,
++                        string(ACTION_PACKET_ACTION) + "," + ACTION_SET_TC },
++                      { ACL_TABLE_TYPE_BPOINT_TYPES, BIND_POINT_TYPE_PORT } } } }));
++
++        orch->doAclTableTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName, SET_COMMAND,
++                    { { ACL_TABLE_DESCRIPTION, "set-tc table" },
++                      { ACL_TABLE_TYPE, aclTableTypeName },
++                      { ACL_TABLE_STAGE, STAGE_INGRESS },
++                      { ACL_TABLE_PORTS, "1,2" } } } }));
++        ASSERT_TRUE(orch->getAclTable(aclTableName));
++
++        orch->doAclRuleTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName + "|" + aclRuleName, SET_COMMAND,
++                    { { MATCH_SRC_IP, "1.1.1.1/32" },
++                      { ACTION_PACKET_ACTION, PACKET_ACTION_FORWARD },
++                      { ACTION_SET_TC, "5" } } } }));
++
++        auto rule = orch->getAclRule(aclTableName, aclRuleName);
++        ASSERT_TRUE(rule);
++        const auto &actions = Portal::AclRuleInternal::getActions(rule);
++        auto setTcIt = actions.find(SAI_ACL_ENTRY_ATTR_ACTION_SET_TC);
++        ASSERT_NE(setTcIt, actions.end());
++        EXPECT_EQ(setTcIt->second.getSaiAttr().value.aclaction.parameter.u8, 5);
++
++        orch->doAclRuleTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName + "|" + aclRuleName, DEL_COMMAND, {} } }));
++        ASSERT_FALSE(orch->getAclRule(aclTableName, aclRuleName));
++
++        orch->doAclRuleTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName + "|" + "INVALID_TC_RULE", SET_COMMAND,
++                    { { MATCH_SRC_IP, "2.2.2.2/32" },
++                      { ACTION_PACKET_ACTION, PACKET_ACTION_FORWARD },
++                      { ACTION_SET_TC, "8" } } } }));
++        ASSERT_FALSE(orch->getAclRule(aclTableName, "INVALID_TC_RULE"));
++    }
++
++    // SET_TC on a table type that does not advertise the action is rejected.
++    TEST_F(AclOrchTest, AclRule_Set_Tc_TableType_NotAdvertised_Rejected)
++    {
++        const string aclTableTypeName = "TEST_NO_SET_TC_TYPE";
++        const string aclTableName     = "TEST_NO_SET_TC_TABLE";
++        const string aclRuleName      = "TEST_NO_SET_TC_RULE";
++
++        auto orch = createAclOrch();
++
++        if (!orch->isAclActionSupported(ACL_STAGE_INGRESS, SAI_ACL_ACTION_TYPE_SET_TC))
++        {
++            GTEST_SKIP() << "SAI_ACL_ACTION_TYPE_SET_TC not supported by test SAI";
++        }
++
++        orch->doAclTableTypeTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableTypeName, SET_COMMAND,
++                    { { ACL_TABLE_TYPE_MATCHES, MATCH_SRC_IP },
++                      { ACL_TABLE_TYPE_ACTIONS, ACTION_PACKET_ACTION },
++                      { ACL_TABLE_TYPE_BPOINT_TYPES, BIND_POINT_TYPE_PORT } } } }));
++
++        orch->doAclTableTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName, SET_COMMAND,
++                    { { ACL_TABLE_DESCRIPTION, "no-set-tc table" },
++                      { ACL_TABLE_TYPE, aclTableTypeName },
++                      { ACL_TABLE_STAGE, STAGE_INGRESS },
++                      { ACL_TABLE_PORTS, "1,2" } } } }));
++        ASSERT_TRUE(orch->getAclTable(aclTableName));
++
++        orch->doAclRuleTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName + "|" + aclRuleName, SET_COMMAND,
++                    { { MATCH_SRC_IP, "1.1.1.1/32" },
++                      { ACTION_PACKET_ACTION, PACKET_ACTION_FORWARD },
++                      { ACTION_SET_TC, "3" } } } }));
++        ASSERT_FALSE(orch->getAclRule(aclTableName, aclRuleName));
++    }
++
+     // An ACL rule with POLICER_ACTION referencing a POLICER entry is realized as
+     // SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER. A rule referencing a policer that
+     // does not exist yet is deferred (relies on the m_toSync retry) and not created.

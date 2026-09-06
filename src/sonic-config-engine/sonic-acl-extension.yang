@@ -81,8 +81,22 @@ module sonic-acl-extension {
     }
   }
 
+  grouping extended-action-config {
+    leaf set-tc {
+      type uint8 {
+        range 0..7;
+      }
+      description
+        "Traffic class value to assign to matching packets";
+    }
+  }
+
   augment "/oc-acl:acl/oc-acl:acl-sets/oc-acl:acl-set/oc-acl:acl-entries/oc-acl:acl-entry/oc-acl:l2/oc-acl:config" {
     uses extended-l2-match;
+  }
+
+  augment "/oc-acl:acl/oc-acl:acl-sets/oc-acl:acl-set/oc-acl:acl-entries/oc-acl:acl-entry/oc-acl:actions/oc-acl:config" {
+    uses extended-action-config;
   }
 
   augment "/oc-acl:acl/oc-acl:acl-sets/oc-acl:acl-set/oc-acl:acl-entries/oc-acl:acl-entry" {

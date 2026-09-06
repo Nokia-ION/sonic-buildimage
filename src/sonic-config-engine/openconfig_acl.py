@@ -3311,7 +3311,7 @@ class yc_config_openconfig_acl__acl_acl_sets_acl_set_acl_entries_acl_entry_actio
 
   YANG Description: Config data for ACL actions
   """
-  __slots__ = ('_path_helper', '_extmethods', '__forwarding_action','__log_action',)
+  __slots__ = ('_path_helper', '_extmethods', '__forwarding_action','__log_action','__set_tc',)
 
   _yang_name = 'config'
 
@@ -3324,6 +3324,7 @@ class yc_config_openconfig_acl__acl_acl_sets_acl_set_acl_entries_acl_entry_actio
     self._extmethods = False
     self.__forwarding_action = YANGDynClass(base=RestrictedClassType(base_type=six.text_type, restriction_type="dict_key", restriction_arg={u'DROP': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'oc-acl:REJECT': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'ACCEPT': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'REJECT': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'oc-acl:ACCEPT': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'oc-acl:DROP': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}},), is_leaf=True, yang_name="forwarding-action", parent=self, path_helper=self._path_helper, extmethods=self._extmethods, register_paths=True, namespace='http://openconfig.net/yang/acl', defining_module='openconfig-acl', yang_type='identityref', is_config=True)
     self.__log_action = YANGDynClass(base=RestrictedClassType(base_type=six.text_type, restriction_type="dict_key", restriction_arg={u'LOG_SYSLOG': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'oc-acl:LOG_SYSLOG': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'LOG_NONE': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'oc-acl:LOG_NONE': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}},), default=six.text_type("LOG_NONE"), is_leaf=True, yang_name="log-action", parent=self, path_helper=self._path_helper, extmethods=self._extmethods, register_paths=True, namespace='http://openconfig.net/yang/acl', defining_module='openconfig-acl', yang_type='identityref', is_config=True)
+    self.__set_tc = YANGDynClass(base=RestrictedClassType(base_type=RestrictedClassType(base_type=int, restriction_dict={'range': ['0..255']}, int_size=8), restriction_dict={u'range': [u'0..7']}), is_leaf=True, yang_name="set-tc", parent=self, path_helper=self._path_helper, extmethods=self._extmethods, register_paths=True, namespace='https://github.com/Azure/sonic-buildimage', defining_module='sonic-acl-extension', yang_type='uint8', is_config=True)
 
     load = kwargs.pop("load", None)
     if args:
@@ -3431,11 +3432,42 @@ packet.
   def _unset_log_action(self):
     self.__log_action = YANGDynClass(base=RestrictedClassType(base_type=six.text_type, restriction_type="dict_key", restriction_arg={u'LOG_SYSLOG': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'oc-acl:LOG_SYSLOG': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'LOG_NONE': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}, u'oc-acl:LOG_NONE': {u'@namespace': u'http://openconfig.net/yang/acl', u'@module': u'openconfig-acl'}},), default=six.text_type("LOG_NONE"), is_leaf=True, yang_name="log-action", parent=self, path_helper=self._path_helper, extmethods=self._extmethods, register_paths=True, namespace='http://openconfig.net/yang/acl', defining_module='openconfig-acl', yang_type='identityref', is_config=True)
 
+  def _get_set_tc(self):
+    """
+    Getter method for set_tc, mapped from YANG variable /acl/acl_sets/acl_set/acl_entries/acl_entry/actions/config/set_tc (uint8)
+
+    YANG Description: Traffic class value to assign to matching packets
+    """
+    return self.__set_tc
+
+  def _set_set_tc(self, v, load=False):
+    """
+    Setter method for set_tc, mapped from YANG variable /acl/acl_sets/acl_set/acl_entries/acl_entry/actions/config/set_tc (uint8)
+    """
+    if hasattr(v, "_utype"):
+      v = v._utype(v)
+    try:
+      t = YANGDynClass(v,base=RestrictedClassType(base_type=RestrictedClassType(base_type=int, restriction_dict={'range': ['0..255']}, int_size=8), restriction_dict={u'range': [u'0..7']}), is_leaf=True, yang_name="set-tc", parent=self, path_helper=self._path_helper, extmethods=self._extmethods, register_paths=True, namespace='https://github.com/Azure/sonic-buildimage', defining_module='sonic-acl-extension', yang_type='uint8', is_config=True)
+    except (TypeError, ValueError):
+      raise ValueError({
+          'error-string': """set_tc must be of a type compatible with uint8""",
+          'defined-type': "uint8",
+          'generated-type': """YANGDynClass(base=RestrictedClassType(base_type=RestrictedClassType(base_type=int, restriction_dict={'range': ['0..255']}, int_size=8), restriction_dict={u'range': [u'0..7']}), is_leaf=True, yang_name="set-tc", parent=self, path_helper=self._path_helper, extmethods=self._extmethods, register_paths=True, namespace='https://github.com/Azure/sonic-buildimage', defining_module='sonic-acl-extension', yang_type='uint8', is_config=True)""",
+        })
+
+    self.__set_tc = t
+    if hasattr(self, '_set'):
+      self._set()
+
+  def _unset_set_tc(self):
+    self.__set_tc = YANGDynClass(base=RestrictedClassType(base_type=RestrictedClassType(base_type=int, restriction_dict={'range': ['0..255']}, int_size=8), restriction_dict={u'range': [u'0..7']}), is_leaf=True, yang_name="set-tc", parent=self, path_helper=self._path_helper, extmethods=self._extmethods, register_paths=True, namespace='https://github.com/Azure/sonic-buildimage', defining_module='sonic-acl-extension', yang_type='uint8', is_config=True)
+
   forwarding_action = __builtin__.property(_get_forwarding_action, _set_forwarding_action)
   log_action = __builtin__.property(_get_log_action, _set_log_action)
+  set_tc = __builtin__.property(_get_set_tc, _set_set_tc)
 
 
-  _pyangbind_elements = OrderedDict([('forwarding_action', forwarding_action), ('log_action', log_action), ])
+  _pyangbind_elements = OrderedDict([('forwarding_action', forwarding_action), ('log_action', log_action), ('set_tc', set_tc), ])
 
 
 class yc_state_openconfig_acl__acl_acl_sets_acl_set_acl_entries_acl_entry_actions_state(PybindBase):

@@ -2867,5 +2867,205 @@
                 ]
             }
         }
+    },
+    "ACL_RULE_VALID_SET_TC_L3_INGRESS": {
+        "sonic-acl:sonic-acl": {
+            "sonic-acl:ACL_RULE": {
+                "ACL_RULE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L3-INGRESS",
+                        "PACKET_ACTION": "FORWARD",
+                        "PRIORITY": 100,
+                        "RULE_NAME": "Rule_SetTc_Valid",
+                        "SET_TC": 3
+                    }
+                ]
+            },
+            "sonic-acl:ACL_TABLE": {
+                "ACL_TABLE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L3-INGRESS",
+                        "policy_desc": "Ingress L3 table with SET_TC",
+                        "ports": ["Ethernet1"],
+                        "stage": "INGRESS",
+                        "type": "L3"
+                    }
+                ]
+            }
+        },
+        "sonic-port:sonic-port": {
+            "sonic-port:PORT": {
+                "PORT_LIST": [
+                    {
+                        "admin_status": "up",
+                        "alias": "eth1",
+                        "description": "Ethernet1",
+                        "mtu": 9000,
+                        "lanes": "0,1,2,3",
+                        "name": "Ethernet1",
+                        "speed": 25000
+                    }
+                ]
+            }
+        }
+    },
+    "ACL_RULE_INVALID_SET_TC_L2_TYPE": {
+        "sonic-acl:sonic-acl": {
+            "sonic-acl:ACL_RULE": {
+                "ACL_RULE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L2",
+                        "PACKET_ACTION": "FORWARD",
+                        "PRIORITY": 100,
+                        "RULE_NAME": "Rule_SetTc_InvalidType",
+                        "SET_TC": 3
+                    }
+                ]
+            },
+            "sonic-acl:ACL_TABLE": {
+                "ACL_TABLE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L2",
+                        "policy_desc": "L2 table with SET_TC",
+                        "ports": [""],
+                        "stage": "INGRESS",
+                        "type": "L2"
+                    }
+                ]
+            }
+        }
+    },
+    "ACL_RULE_INVALID_SET_TC_EGRESS_L3": {
+        "sonic-acl:sonic-acl": {
+            "sonic-acl:ACL_RULE": {
+                "ACL_RULE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L3-EGRESS",
+                        "PACKET_ACTION": "FORWARD",
+                        "PRIORITY": 100,
+                        "RULE_NAME": "Rule_SetTc_InvalidStage",
+                        "SET_TC": 3
+                    }
+                ]
+            },
+            "sonic-acl:ACL_TABLE": {
+                "ACL_TABLE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L3-EGRESS",
+                        "policy_desc": "Egress L3 table with SET_TC",
+                        "ports": ["Ethernet1"],
+                        "stage": "EGRESS",
+                        "type": "L3"
+                    }
+                ]
+            }
+        },
+        "sonic-port:sonic-port": {
+            "sonic-port:PORT": {
+                "PORT_LIST": [
+                    {
+                        "admin_status": "up",
+                        "alias": "eth1",
+                        "description": "Ethernet1",
+                        "mtu": 9000,
+                        "lanes": "0,1,2,3",
+                        "name": "Ethernet1",
+                        "speed": 25000
+                    }
+                ]
+            }
+        }
+    },
+    "ACL_RULE_INVALID_SET_TC_RANGE": {
+        "sonic-acl:sonic-acl": {
+            "sonic-acl:ACL_RULE": {
+                "ACL_RULE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L3-RANGE",
+                        "PACKET_ACTION": "FORWARD",
+                        "PRIORITY": 100,
+                        "RULE_NAME": "Rule_SetTc_InvalidRange",
+                        "SET_TC": 8
+                    }
+                ]
+            },
+            "sonic-acl:ACL_TABLE": {
+                "ACL_TABLE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-L3-RANGE",
+                        "policy_desc": "Ingress L3 table with invalid SET_TC",
+                        "ports": ["Ethernet1"],
+                        "stage": "INGRESS",
+                        "type": "L3"
+                    }
+                ]
+            }
+        },
+        "sonic-port:sonic-port": {
+            "sonic-port:PORT": {
+                "PORT_LIST": [
+                    {
+                        "admin_status": "up",
+                        "alias": "eth1",
+                        "description": "Ethernet1",
+                        "mtu": 9000,
+                        "lanes": "0,1,2,3",
+                        "name": "Ethernet1",
+                        "speed": 25000
+                    }
+                ]
+            }
+        }
+    },
+    "ACL_RULE_VALID_SET_TC_CUSTOM_TYPE": {
+        "sonic-acl:sonic-acl": {
+            "sonic-acl:ACL_RULE": {
+                "ACL_RULE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-CUSTOM",
+                        "PACKET_ACTION": "FORWARD",
+                        "PRIORITY": 100,
+                        "RULE_NAME": "Rule_SetTc_Custom",
+                        "SET_TC": 5
+                    }
+                ]
+            },
+            "sonic-acl:ACL_TABLE": {
+                "ACL_TABLE_LIST": [
+                    {
+                        "ACL_TABLE_NAME": "SET-TC-CUSTOM",
+                        "policy_desc": "Custom table type with SET_TC action",
+                        "ports": ["Ethernet1"],
+                        "stage": "INGRESS",
+                        "type": "CUSTOM_L3_SET_TC"
+                    }
+                ]
+            },
+            "sonic-acl:ACL_TABLE_TYPE": {
+                "ACL_TABLE_TYPE_LIST": [
+                    {
+                        "ACL_TABLE_TYPE_NAME": "CUSTOM_L3_SET_TC",
+                        "MATCHES": ["SRC_IP", "DST_IP"],
+                        "ACTIONS": ["PACKET_ACTION", "SET_TC"],
+                        "BIND_POINTS": ["PORT"]
+                    }
+                ]
+            }
+        },
+        "sonic-port:sonic-port": {
+            "sonic-port:PORT": {
+                "PORT_LIST": [
+                    {
+                        "admin_status": "up",
+                        "alias": "eth1",
+                        "description": "Ethernet1",
+                        "mtu": 9000,
+                        "lanes": "0,1,2,3",
+                        "name": "Ethernet1",
+                        "speed": 25000
+                    }
+                ]
+            }
+        }
     }
 }
