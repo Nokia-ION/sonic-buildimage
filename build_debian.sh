@@ -537,6 +537,12 @@ EOF
 sudo sed -i 's/^#ListenAddress 0.0.0.0/ListenAddress 0.0.0.0/' $FILESYSTEM_ROOT/etc/ssh/sshd_config
 sudo sed -i 's/^#ListenAddress ::/ListenAddress ::/' $FILESYSTEM_ROOT/etc/ssh/sshd_config
 
+# Keep the configuration as shipped. hostcfgd renders the SSH_SERVER policies
+# from CONFIG_DB onto this copy rather than onto the file in use, so that
+# deleting a policy puts back the value set here instead of dropping the
+# directive and leaving sshd on its own built-in default.
+sudo cp $FILESYSTEM_ROOT/etc/ssh/sshd_config $FILESYSTEM_ROOT/etc/ssh/sshd_config.image
+
 # Use libpam_systemd, since that's now needed for limiting login sessions
 sudo LANG=C DEBIAN_FRONTEND=noninteractive chroot $FILESYSTEM_ROOT apt-get -y install libpam-systemd
 
