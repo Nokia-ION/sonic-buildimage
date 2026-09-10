@@ -2643,29 +2643,53 @@ class BGPConfigDaemon:
                     command += ['-c', 'shutdown']
             self.__run_command(table, command)
 
+    @staticmethod
+    def _vrrp_vips_from_data(data, ip_version):
+        vips = set()
+        if not data:
+            return vips
+        as_list = lambda v: v if isinstance(v, list) else str(v).split(',')
+        for param in ('vip', 'vip@'):
+            if param not in data:
+                continue
+            for vip in as_list(data[param]):
+                vip = (vip or '').strip()
+                if not vip:
+                    continue
+                try:
+                    ip_addr = ipaddress.ip_interface(vip.split('/')[0])
+                except ValueError:
+                    continue
+                if ip_addr.version == ip_version:
+                    vips.add(str(ip_addr.ip))
+        return vips
+
     def vrrp_handler(self, table, key, data):
         syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](vrrp) value for {} changed to {}'.format(key, data))
         key_params = key.split('|')
         intf_cmd = 'interface {}'.format(key_params[0])
         cmd = 'vrrp {}'.format(key_params[1])
-        as_list = lambda v: v if isinstance(v, list) else str(v).split(',')
         deferred_params = {'accept_mode', 'virtual_link_local'}
+        cache_key = self.config_db.get_table_key(table, key)
 
         if not data:
             command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
             self.__run_command(table, command)
+            self.table_data_cache.pop(cache_key, None)
+            vrrp_state_refresh()
             return
 
+        new_vips = self._vrrp_vips_from_data(data, 4)
+        old_vips = self._vrrp_vips_from_data(self.table_data_cache.get(cache_key), 4)
         command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd]
+        for vip in sorted(old_vips - new_vips):
+            syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](vrrp) remove vip {} from {}'.format(vip, key))
+            command += ['-c', 'no {} ip {}'.format(cmd, vip)]
+        for vip in sorted(new_vips):
+            command += ['-c', '{} ip {}'.format(cmd, vip)]
         for param in data:
             if param == 'vip' or param == 'vip@':
-                for vip in as_list(data[param]):
-                    vip = vip.strip()
-                    if not vip:
-                        continue
-                    ip_addr = ipaddress.ip_interface(vip.split('/')[0])
-                    if ip_addr.version == 4:
-                        command += ['-c', '{} ip {}'.format(cmd, vip.split('/')[0])]
+                continue
             elif param == 'priority':
                 command += ['-c', '{} priority {}'.format(cmd, data[param])]
             elif param == 'adv_interval':
@@ -2697,6 +2721,7 @@ class BGPConfigDaemon:
                 )
 
         self.__run_command(table, command)
+        self.table_data_cache[cache_key] = dict(data)
         vrrp_state_refresh()
 
     def vrrp6_handler(self, table, key, data):
@@ -2704,24 +2729,27 @@ class BGPConfigDaemon:
         key_params = key.split('|')
         intf_cmd = 'interface {}'.format(key_params[0])
         cmd = 'vrrp6 {}'.format(key_params[1])
-        as_list = lambda v: v if isinstance(v, list) else str(v).split(',')
         deferred_params = {'accept_mode', 'virtual_link_local'}
+        cache_key = self.config_db.get_table_key(table, key)
 
         if not data:
             command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd, '-c', 'no {}'.format(cmd)]
             self.__run_command(table, command)
+            self.table_data_cache.pop(cache_key, None)
+            vrrp_state_refresh()
             return
 
+        new_vips = self._vrrp_vips_from_data(data, 6)
+        old_vips = self._vrrp_vips_from_data(self.table_data_cache.get(cache_key), 6)
         command = ['vtysh', '-c', 'configure terminal', '-c', intf_cmd]
+        for vip in sorted(old_vips - new_vips):
+            syslog.syslog(syslog.LOG_INFO, '[vrrp cfgd](vrrp6) remove vip {} from {}'.format(vip, key))
+            command += ['-c', 'no {} ipv6 {}'.format(cmd, vip)]
+        for vip in sorted(new_vips):
+            command += ['-c', '{} ipv6 {}'.format(cmd, vip)]
         for param in data:
             if param == 'vip' or param == 'vip@':
-                for vip in as_list(data[param]):
-                    vip = vip.strip()
-                    if not vip:
-                        continue
-                    ip_addr = ipaddress.ip_interface(vip.split('/')[0])
-                    if ip_addr.version == 6:
-                        command += ['-c', '{} ipv6 {}'.format(cmd, vip.split('/')[0])]
+                continue
             elif param == 'priority':
                 command += ['-c', '{} priority {}'.format(cmd, data[param])]
             elif param == 'adv_interval':
@@ -2747,6 +2775,7 @@ class BGPConfigDaemon:
                 )
 
         self.__run_command(table, command)
+        self.table_data_cache[cache_key] = dict(data)
         vrrp_state_refresh()
 
     def vrrp_track_handler(self, table, key, data):
