@@ -1,0 +1,78 @@
+From 6e57d4c54177292a7922049e10e476c6248df382 Mon Sep 17 00:00:00 2001
+From: srinj <sriniketh.j@nokia.com>
+Date: Thu, 10 Sep 2026 16:20:16 +0530
+Subject: [PATCH] fix: vrrp v6 display lla backup
+
+---
+ vrrpd/vrrp6_vty.c | 41 +++++++++++++++++++++++++++++++++++------
+ 1 file changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/vrrpd/vrrp6_vty.c b/vrrpd/vrrp6_vty.c
+index 63a354cdb3..178333d709 100644
+--- a/vrrpd/vrrp6_vty.c
++++ b/vrrpd/vrrp6_vty.c
+@@ -358,6 +358,39 @@ DEFPY_YANG(vrrp6_default,
+ 
+ /* clang-format on */
+ 
++/*
++ * Format Primary IP
++ *
++ * vr
++ *    VRRP6 router to format primary IP for
++ * buf
++ *    Buffer to store the formatted IP
++ * buflen
++ *    Length of the buffer
++ *
++ * Returns:
++ *    None
++ */
++static void vrrp6_display_primary_ipv6(const struct vrrp_vrouter *vr,
++									   char *buf,
++									   size_t buflen)
++{
++	struct connected *c;
++
++	ipaddr2str(&vr->vrrp->src, buf, buflen);
++
++	if (buf[0] != '\0' && !ipaddr_is_zero(&vr->vrrp->src))
++		return;
++
++	buf[0] = '\0';
++	c = vr->ifp ? connected_get_linklocal(vr->ifp) : NULL;
++
++	if (c)
++		inet_ntop(AF_INET6, &c->address->u.prefix6, buf, buflen);
++	else
++		strlcpy(buf, "::", buflen);
++}
++
+ /*
+  * Build JSON representation of VRRP6 instance.
+  *
+@@ -396,9 +429,7 @@ static struct json_object *vrrp6_build_json(struct vrrp_vrouter *vr)
+ 	json_object_string_add(v6, "interface",
+ 			       vr->vrrp->mvl_ifp ? vr->vrrp->mvl_ifp->name : "");
+ 	json_object_string_add(v6, "vmac", ethstr6);
+-	ipaddr2str(&vr->vrrp->src, sipstr6, sizeof(sipstr6));
+-	if (strlen(sipstr6) == 0 && vr->vrrp->src.ip.addr == 0x00)
+-		strlcat(sipstr6, "::", sizeof(sipstr6));
++	vrrp6_display_primary_ipv6(vr, sipstr6, sizeof(sipstr6));
+ 	json_object_string_add(v6, "primaryAddress", sipstr6);
+ 	json_object_string_add(v6, "status", stastr6);
+ 	json_object_int_add(v6, "effectivePriority", vr->vrrp->priority);
+@@ -459,9 +490,7 @@ static void vrrp6_show(struct vty *vty, struct vrrp_vrouter *vr)
+ 	prefix_mac2str(&vr->vrrp->vmac, ethstr6, sizeof(ethstr6));
+ 	ttable_add_row(tt, "%s|%s", "VRRP interface (v6)",
+ 		       vr->vrrp->mvl_ifp ? vr->vrrp->mvl_ifp->name : "None");
+-	ipaddr2str(&vr->vrrp->src, sipstr6, sizeof(sipstr6));
+-	if (strlen(sipstr6) == 0 && vr->vrrp->src.ip.addr == 0x00)
+-		strlcat(sipstr6, "::", sizeof(sipstr6));
++	vrrp6_display_primary_ipv6(vr, sipstr6, sizeof(sipstr6));
+ 	ttable_add_row(tt, "%s|%s", "Primary IP (v6)", sipstr6);
+ 	ttable_add_row(tt, "%s|%s", "Virtual MAC (v6)", ethstr6);
+ 	ttable_add_row(tt, "%s|%s", "Status (v6)", stastr6);
+-- 
+2.43.0
+
