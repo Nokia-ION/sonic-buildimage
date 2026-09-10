@@ -111,6 +111,7 @@ template(name="WelfRemoteFormat" type="string" string="%TIMESTAMP% id=firewall t
 {% endif -%}
 {% set vrf = conf.get('vrf', 'default') | string | replace('\n', '') | replace('\r', '') | replace('"', '') | replace('\\', '') | replace('%', '') -%}
 {% set severity = conf.get('severity', gconf.get('severity', '*')) | string | replace('\n', '') | replace('\r', '') | replace('"', '') | replace('\\', '') | replace('%', '') -%}
+{% set facility = conf.get('facility', '*') | string | replace('\n', '') | replace('\r', '') | replace('"', '') | replace('\\', '') | replace('%', '') -%}
 {% set filter = conf.get('filter') -%}
 {% set regex = conf.get('filter_regex') -%}
 
@@ -148,10 +149,10 @@ template(name="WelfRemoteFormat" type="string" string="%TIMESTAMP% id=firewall t
 {% endif %}
 {% if use_tls %}
 {% set cert_dir = '/etc/sonic/ssl-certs/' ~ profile_id -%}
-*.{{ severity }}
+{{ facility }}.{{ severity }}
 action(type="omfwd" Target="{{ server | string | replace('\n', '') | replace('\r', '') | replace('"', '') | replace('\\', '') | replace('%', '') }}" Port="{{ port }}" Protocol="tcp" Template="{{ template }}" action.resumeRetryCount="60" queue.type="LinkedList" queue.size="20000" StreamDriver="ossl" StreamDriverMode="1" StreamDriverAuthMode="x509/name" StreamDriver.CAFile="{{ cert_dir }}/ca-bundle.pem" StreamDriver.CertFile="{{ cert_dir }}/cert.pem" StreamDriver.KeyFile="{{ cert_dir }}/key.pem"{{ options }})
 {% else %}
-*.{{ severity }}
+{{ facility }}.{{ severity }}
 action(type="omfwd" Target="{{ server | string | replace('\n', '') | replace('\r', '') | replace('"', '') | replace('\\', '') | replace('%', '') }}" Port="{{ port }}" Protocol="{{ proto }}" Template="{{ template }}" action.resumeRetryCount="60" queue.type="LinkedList" queue.size="20000"{{ options }})
 {% endif %}
 {% endif %}

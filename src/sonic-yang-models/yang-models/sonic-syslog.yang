@@ -181,6 +181,11 @@ module sonic-syslog {
                     type rsyslog-severity;
                 }
 
+                leaf facility {
+                    description "Syslog facility for filtering logs forwarded to this server";
+                    type string;
+                }
+
             }
             /* end of list SYSLOG_SERVER_LIST */
         }
