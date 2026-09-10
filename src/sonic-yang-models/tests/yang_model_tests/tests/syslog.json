@@ -94,6 +94,16 @@
         "desc": "TLS protocol without tls_profile_id must be rejected",
         "eStr": ["tls_profile_id is required when protocol is tls"]
     },
+    "SYSLOG_SERVER_TRANSPORT_SECURITY_FALSE": {
+        "desc": "transport_security false without tls_profile_id must be accepted"
+    },
+    "SYSLOG_SERVER_TRANSPORT_SECURITY_TRUE": {
+        "desc": "Valid transport_security true with tls_profile_id"
+    },
+    "SYSLOG_SERVER_TRANSPORT_SECURITY_TRUE_MISSING_PROFILE": {
+        "desc": "transport_security true without tls_profile_id must be rejected",
+        "eStr": ["tls_profile_id is required when transport_security is true"]
+    },
     "SYSLOG_SERVER_TLS_PROFILE_GNXI": {
         "desc": "gnxi cannot be used as a syslog TLS profile",
         "eStr": ["gnxi is the gNMI listener profile and cannot be used for syslog"]

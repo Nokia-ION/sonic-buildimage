@@ -158,7 +158,7 @@ module sonic-syslog {
                         "When true, forward this server over TLS (same as protocol tls).
                          Kept for OpenConfig transport-security mapping.";
                     type boolean;
-                    must "(current() != true) or ../tls_profile_id" {
+                    must "(current() != 'true') or ../tls_profile_id" {
                         error-message "tls_profile_id is required when transport_security is true";
                     }
                 }
