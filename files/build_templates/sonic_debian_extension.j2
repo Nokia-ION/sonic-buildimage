@@ -746,6 +746,13 @@ sudo cp $IMAGE_CONFIGS/config-topology/config-topology.sh $FILESYSTEM_ROOT/usr/b
 # Generate initial SONiC configuration file
 j2 files/build_templates/init_cfg.json.j2 | sudo tee $FILESYSTEM_ROOT/etc/sonic/init_cfg.json
 
+# Copy bootz script and service file
+install_deb_package $debs_path/bootz-client_*.deb
+sudo cp $IMAGE_CONFIGS/bootz/bootz $FILESYSTEM_ROOT/usr/bin/bootz
+sudo cp $IMAGE_CONFIGS/bootz/bootz.service $FILESYSTEM_ROOT_USR_LIB_SYSTEMD_SYSTEM/bootz.service
+echo "bootz.service" | sudo tee -a $GENERATED_SERVICE_FILE
+sudo LANG=C chroot $FILESYSTEM_ROOT systemctl enable bootz.service
+
 # Copy config-setup script, conf file and service file
 j2 files/build_templates/config-setup.service.j2 | sudo tee $FILESYSTEM_ROOT_USR_LIB_SYSTEMD_SYSTEM/config-setup.service
 sudo cp $IMAGE_CONFIGS/config-setup/config-setup $FILESYSTEM_ROOT/usr/bin/config-setup

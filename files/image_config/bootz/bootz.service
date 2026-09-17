@@ -1,0 +1,15 @@
+[Unit]
+Description=BootZ Bootstrap Service
+After=network-online.target rc-local.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bootz boot
+ExecStop=/usr/bin/bootz shut
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sonic.target
