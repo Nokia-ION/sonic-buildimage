@@ -101,6 +101,62 @@ AF_STATS_NAMES = {
     'ipv6Unicast': 'ipv6_unicast',
 }
 
+
+# The field carrying the negotiated capabilities. The '@' is SONiC's mark for a
+# field holding a list.
+APPLIED_CAPS_FIELD = "supported_capabilities@"
+
+# How FRR spells a capability both ends agreed on, as against one that was only
+# advertised or only received.
+CAP_NEGOTIATED = "advertisedAndReceived"
+
+# The OpenConfig capability identities, each with the key in FRR's
+# neighborCapabilities that evidences it.
+#
+# openconfig-bgp-types names six and no more, so a capability outside them
+# cannot be reported however it is negotiated: extendedMessage,
+# enhancedRouteRefresh, longLivedGracefulRestart, pathsLimit, hostName,
+# softwareVersion and linkLocalNextHop all appear in FRR's report and none has
+# an identity to be named by. They are dropped here rather than in the
+# consumer, so that the field only ever holds names the model can express.
+CAP_SCALAR_IDENTITIES = (
+    ("routeRefresh", "ROUTE_REFRESH"),
+    ("4byteAs", "ASN32"),
+    ("gracefulRestart", "GRACEFUL_RESTART"),
+    ("extendedNexthop", "EXTENDED_NEXTHOP_ENCODING"),
+)
+
+# The two FRR reports per address family, as an object each, with the same
+# advertised-versus-negotiated distinction expressed as a flag. addPath spells
+# its flag differently because it tracks the receive direction separately.
+CAP_PER_FAMILY_IDENTITIES = (
+    ("multiprotocolExtensions", "MPBGP", CAP_NEGOTIATED),
+    ("addPath", "ADD_PATHS", "rxAdvertisedAndReceived"),
+)
+
+
+def negotiated_capabilities(caps):
+    """The capability identities this session negotiated, sorted so that the
+    field is stable to compare between scrapes."""
+    if not isinstance(caps, dict):
+        return []
+    found = set()
+    for key, identity in CAP_SCALAR_IDENTITIES:
+        if caps.get(key) == CAP_NEGOTIATED:
+            found.add(identity)
+    for key, identity, flag in CAP_PER_FAMILY_IDENTITIES:
+        families = caps.get(key)
+        if not isinstance(families, dict):
+            continue
+        for family in families.values():
+            # One family is enough: the identity is not per family in
+            # OpenConfig, so it describes the session rather than a family.
+            if isinstance(family, dict) and family.get(flag):
+                found.add(identity)
+                break
+    return sorted(found)
+
+
 class BgpStateGet:
     def __init__(self):
         # set peer_l stores the Neighbor peer Ip address
@@ -303,6 +359,12 @@ class BgpStateGet:
         remote_addr = peer_info.get('hostForeign')
         if remote_addr and remote_addr != UNKNOWN_ADDR:
             fields['remote_address'] = remote_addr
+
+        # Absent until a session negotiates something, which keeps a peer that
+        # never came up from reporting capabilities it only ever advertised.
+        caps = negotiated_capabilities(peer_info.get('neighborCapabilities'))
+        if caps:
+            fields[APPLIED_CAPS_FIELD] = ','.join(caps)
 
         return fields
 
