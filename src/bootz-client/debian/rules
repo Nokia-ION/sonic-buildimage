@@ -1,0 +1,7 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+# Go binaries have compressed debug sections that break dwz/strip
+override_dh_dwz:
+override_dh_strip:

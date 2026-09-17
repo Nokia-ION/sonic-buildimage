@@ -1,0 +1,12 @@
+Source: bootz-client
+Maintainer: Jason Bridges <jasonbridges@google.com>
+Section: net
+Priority: optional
+Standards-Version: 3.9.6
+Build-Depends: debhelper (>= 9)
+
+Package: bootz-client
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Bootz client for SONiC
+ Bootz client for provisioning SONiC devices.

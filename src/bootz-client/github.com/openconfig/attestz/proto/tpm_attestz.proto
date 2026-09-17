@@ -1,0 +1,109 @@
+//
+// Copyright 2023 Google Inc. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" B1IS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+syntax = "proto3";
+
+package openconfig.attestz;
+
+import "github.com/openconfig/attestz/proto/common_definitions.proto";
+
+option go_package = "github.com/openconfig/attestz";
+
+
+// Request for a given control card to attest its boot state.
+message AttestRequest {
+  // Switch control card selected identifier.
+  ControlCardSelection control_card_selection = 1;
+
+  // Random nonce to be used for PCR quotes.
+  bytes nonce = 2;
+
+  // Hash algorithm for PCR selection bank.
+  Tpm20HashAlgo hash_algo = 3;
+
+  // Indices for selected PCRs to attest.
+  repeated int32 pcr_indices = 4;
+}
+
+// Response from the specified control card containing attestation evidence of
+// its boot state.
+message AttestResponse {
+  message AttestationCert {
+    oneof value {
+      string aik_cert = 1;  // TPM 1.2
+      string oiak_cert = 2; // TPM 2.0
+    }
+  }
+  // Vendor identity fields of the selected control card.
+  ControlCardVendorId control_card_id = 1;
+
+  // PEM-encoded owner initial attestation key certificate signed by the switch
+  // owner/administrator CA during TPM enrollment workflow. The PEM formatted 
+  // cert string can have more than one certificate block representing a
+  // certificate chain.
+  string oiak_cert = 2 [deprecated = true];
+
+  // Final observed unsigned PCR values {pcr_index -> pcr_value}.
+  // PCR bytes are formatted in accordance with section 10.3 of
+  // https://trustedcomputinggroup.org/wp-content/uploads/TCG_TPM2_r1p59_Part2_Structures_pub.pdf#page=111. protolint:disable:this MAX_LINE_LENGTH
+  // Values should be unencoded, raw bytes.
+  map<int32, bytes> pcr_values = 3;
+
+  // TPM PCR quote `TPM2B_ATTEST` structure - quoted part of `TPM2_Quote()`.
+  // See section 18.4.2 of
+  // https://trustedcomputinggroup.org/wp-content/uploads/TCG_TPM2_r1p59_Part3_Commands_pub.pdf#page=167 protolint:disable:this MAX_LINE_LENGTH
+  // and section 10.12.13 of
+  // https://trustedcomputinggroup.org/wp-content/uploads/TCG_TPM2_r1p59_Part2_Structures_pub.pdf#page=135. protolint:disable:this MAX_LINE_LENGTH
+  // Contents should be unencoded, raw bytes.
+  bytes quoted = 4;
+
+  // PCR quote signature signed with an IAK private key.
+  // This is `TPMT_SIGNATURE` signature part of `TPM2_Quote()`.
+  // See section 18.4.2 of
+  // https://trustedcomputinggroup.org/wp-content/uploads/TCG_TPM2_r1p59_Part3_Commands_pub.pdf#page=167 protolint:disable:this MAX_LINE_LENGTH
+  // and section 11.3.4 of
+  // https://trustedcomputinggroup.org/wp-content/uploads/TCG_TPM2_r1p59_Part2_Structures_pub.pdf#page=153.  protolint:disable:this MAX_LINE_LENGTH
+  // Contents should be unencoded, raw bytes.
+  bytes quote_signature = 5;
+
+  // [Optional] PEM-encoded owner initial DevID certificate signed by the
+  // switch owner/administrator CA. This field may only be populated for
+  // the standby/secondary control card. The PEM formatted cert string can have
+  // more than one certificate block representing a certificate chain.
+  string oidevid_cert = 6;
+
+  // PEM-encoded owner attestation key certificate signed by the switch
+  // owner/administrator CA during TOM enrollment workflow. The PEM formatted
+  // cert string can have more than one certificate block representing a
+  // certificate chain. The attestation key certificate depends on the TPM 
+  // version
+  // TPM 1.2: Attestation Identity Key - aik_cert
+  // TPM 2.0: Owner Initial Attestation Key - oiak_cert
+  AttestationCert attestation_cert = 7;
+}
+
+// The service is responsible for TPM attestation workflow on the switch
+// owner/administrator side. In this workflow switch owner verifies that the
+// device's end-to-end boot state (bootloader, OS, configurations, etc.) matches
+// owner's expectations. This approach assumes that expected final PCR values
+// were precomputed by the switch owner beforehand and are available during the
+// attestation workflow.
+// Please consult Readme for more details on the workflow.
+service TpmAttestzService {
+  // Each control card reports its PCR quotes and oIAK cert, while the switch
+  // owner verifies oIAK cert and signature over PCR quotes and matches final
+  // PCR values against its expectations.
+  rpc Attest(AttestRequest) returns (AttestResponse);
+}

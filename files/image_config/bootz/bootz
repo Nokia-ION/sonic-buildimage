@@ -1,0 +1,128 @@
+#!/bin/bash
+#
+# bootz - A shell script to wrap the bootz-client. To be used as a systemd service
+
+readonly BOOTZ_CONFIG="/host/bootz_config.json"
+readonly BOOTZ_CONFIG_TMP="/tmp/bootz_config.json"
+readonly BOOTZ_CLIENT="/usr/bin/bootz-client"
+
+log() {
+    echo "bootz: $*"
+}
+
+usage() {
+    echo "Usage: $0 {boot|provision|shut}" >&2
+    exit 1
+}
+
+check_config() {
+    local cfg="${1:-$BOOTZ_CONFIG}"
+    [[ -f "$cfg" ]]
+}
+
+# Emit "--bootz-addr" and "<url>" on separate lines for the configured bootz server URL.
+# Accepts an optional config file path, defaulting to BOOTZ_CONFIG.
+bootz_addr_args() {
+    local -n _bootz_args_arr=$1
+    local cfg="${2:-$BOOTZ_CONFIG}"
+    while read -r url; do
+        _bootz_args_arr+=("--bootz-addr" "$url")
+    done < <(jq -r '.BOOTZ_SERVER_METADATA.server_info.server_urls // [] | .[]' "$cfg")
+}
+
+# Emit "--ntp-addr" and "<ip>" on separate lines per NTP server key in NTP_SERVER.
+# Accepts an optional config file path, defaulting to BOOTZ_CONFIG.
+ntp_addr_args() {
+    local -n _ntp_args_arr=$1
+    local cfg="${2:-$BOOTZ_CONFIG}"
+    while read -r srv; do
+        _ntp_args_arr+=("--ntp-addr" "$srv")
+    done < <(jq -r '.NTP_SERVER // {} | keys[]' "$cfg")
+}
+
+# Move the downloaded config to /host/old_config so that a subsequent SONiC boot can use it
+# for config reload. We need to save the file in /host/ as everything else is ephemeral
+save_config() {
+    mkdir -p /host/old_config
+    if [[ -f /tmp/sonic-config.json ]]; then
+        cp /tmp/sonic-config.json /host/old_config/
+    fi
+}
+
+# Check if bootz client exited with success (0)
+# Return bootz-client exit code otherwise
+check_status() {
+    local status=$1
+    if [ "$status" -ne 0 ]; then
+        log "bootz client failed with exit code $status"
+        exit "$status"
+    fi
+}
+
+cmd_boot() {
+    if ! check_config; then
+        log "$BOOTZ_CONFIG not present, skipping boot"
+	if grep -iq "SONiC" /etc/os-release 2>/dev/null; then
+	    exit 1
+	else
+	    exit 0
+	fi
+    fi
+
+    local -a bootz_args ntp_args
+    bootz_addr_args bootz_args
+    ntp_addr_args ntp_args
+
+    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode report"
+    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode report
+    local exit_code=$?
+    check_status "$exit_code"
+    log "bootz report command succeeded"
+}
+
+cmd_provision() {
+    if ! check_config "$BOOTZ_CONFIG_TMP"; then
+        exit 1
+    fi
+
+    local -a bootz_args ntp_args
+    bootz_addr_args bootz_args "$BOOTZ_CONFIG_TMP"
+    ntp_addr_args ntp_args "$BOOTZ_CONFIG_TMP"
+
+    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --config-db /tmp/sonic-config.json --mode provision"
+    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --config-db /tmp/sonic-config.json --mode provision
+    local exit_code=$?
+    check_status "$exit_code"
+    log "bootz provision command succeeded"
+    save_config
+}
+
+cmd_shut() {
+    if ! check_config; then
+        exit 0
+    fi
+
+    local -a bootz_args ntp_args
+    bootz_addr_args bootz_args
+    ntp_addr_args ntp_args
+    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode report --report-message \"Shutting down\" --report-status info"
+    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode report --report-message "Shutting down" --report-status info
+    local exit_code=$?
+    check_status "$exit_code"
+    log "bootz report shut command succeeded"
+}
+
+case "$1" in
+    boot)
+        cmd_boot
+        ;;
+    provision)
+        cmd_provision
+        ;;
+    shut)
+        cmd_shut
+        ;;
+    *)
+        usage
+        ;;
+esac
