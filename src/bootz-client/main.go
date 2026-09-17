@@ -147,7 +147,7 @@ var (
 	)
 	imageFile = flag.StringP(
 		"image-file", "f",
-		ImagePath,
+		"",
 		"Location of target image file",
 	)
 	installImageCmd = flag.StringP(
