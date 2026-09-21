@@ -703,6 +703,7 @@ SONIC_BUILD_INSTRUCTION :=  $(MAKE) \
                            SLAVE_TAG=$(SLAVE_TAG) \
                            SLAVE_BASE_TAG=$(SLAVE_BASE_TAG) \
                            ENABLE_ZTP=$(ENABLE_ZTP) \
+                           INCLUDE_BOOTZ_DISCOVERY=$(INCLUDE_BOOTZ_DISCOVERY) \
                            INCLUDE_PDE=$(INCLUDE_PDE) \
                            SHUTDOWN_BGP_ON_START=$(SHUTDOWN_BGP_ON_START) \
                            INCLUDE_KUBERNETES=$(INCLUDE_KUBERNETES) \
