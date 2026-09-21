@@ -73,6 +73,90 @@ APPLIED_META_KEY = "BGP_NEIGH_APPLIED_META|global"
 # FRR emits this literal for the local or peer address when no socket is bound.
 UNKNOWN_ADDR = "Unknown"
 
+# Applied route-map configuration, read from FRR rather than from CONFIG_DB.
+# The field names deliberately match the CONFIG_DB ROUTE_MAP ones so a consumer
+# decodes the applied state exactly as it decodes the configured state, from a
+# different table.
+ROUTE_MAP_TABLE = "ROUTE_MAP_APPLIED"
+# A map with no rules is still a map FRR holds, and an empty one is an implicit
+# deny for anything referencing it, so it gets a row of its own rather than
+# vanishing from the applied view.
+ROUTE_MAP_SET_TABLE = "ROUTE_MAP_SET_APPLIED"
+# Its own freshness marker rather than APPLIED_META_KEY: this comes from a
+# separate vtysh call, so one marker could not honestly vouch for both.
+ROUTE_MAP_META_KEY = "ROUTE_MAP_APPLIED_META|global"
+
+
+def parse_route_map_match(clause):
+    """One rendered match clause to a (field, value) pair, or None.
+
+    FRR reports clauses as the text it would print in its configuration, so
+    these are parsed rather than read out of a structure.
+    """
+    parts = clause.split()
+    if len(parts) >= 4 and parts[0] == "ip" and parts[1] == "address" and parts[2] == "prefix-list":
+        return ("match_prefix_set", parts[3])
+    if len(parts) >= 4 and parts[0] == "ipv6" and parts[1] == "address" and parts[2] == "prefix-list":
+        return ("match_ipv6_prefix_set", parts[3])
+    if len(parts) == 2:
+        simple = {"metric": "match_med", "origin": "match_origin",
+                  "community": "match_community", "extcommunity": "match_ext_community"}
+        if parts[0] in simple:
+            return (simple[parts[0]], parts[1])
+        if parts[0] == "local-preference":
+            return ("match_local_pref", parts[1])
+    return None
+
+
+def parse_route_map_set(clause):
+    """One rendered set clause to a dict of fields, possibly empty.
+
+    Two forms need more than a split. 'as-path prepend A A A' repeats the ASN,
+    and the repeat count is what set_repeat_asn holds. 'metric' carries the
+    action in the sign: a bare number is the plain spelling, while +N and -N are
+    the add and subtract actions that live in a separate field.
+    """
+    parts = clause.split()
+    if not parts:
+        return {}
+    if parts[0] == "origin" and len(parts) == 2:
+        return {"set_origin": parts[1]}
+    if parts[0] == "local-preference" and len(parts) == 2:
+        return {"set_local_pref": parts[1]}
+    if parts[0] == "ip" and len(parts) == 3 and parts[1] == "next-hop":
+        return {"set_next_hop": parts[2]}
+    if parts[0] == "metric" and len(parts) == 2:
+        v = parts[1]
+        if v.startswith("+"):
+            return {"set_metric": v[1:], "set_metric_action": "METRIC_ADD_VALUE"}
+        if v.startswith("-"):
+            return {"set_metric": v[1:], "set_metric_action": "METRIC_SUBTRACT_VALUE"}
+        return {"set_med": v}
+    if parts[0] == "as-path" and len(parts) >= 3 and parts[1] == "prepend":
+        asns = parts[2:]
+        return {"set_asn": asns[0], "set_repeat_asn": str(len(asns))}
+    if parts[0] == "community" and len(parts) >= 2:
+        # Stored the way CONFIG_DB stores it, marker included: the additive
+        # marker is how the ADD option is carried, there being no field for it.
+        return {"set_community_inline": " ".join(parts[1:])}
+    return {}
+
+
+def route_map_rule_fields(rule):
+    """Every published field for one rendered rule."""
+    fields = {"route_operation": rule.get("type", "")}
+    for clause in rule.get("matchClauses", []):
+        parsed = parse_route_map_match(clause)
+        if parsed:
+            fields[parsed[0]] = parsed[1]
+    for clause in rule.get("setClauses", []):
+        fields.update(parse_route_map_set(clause))
+    # No OpenConfig leaf can carry these yet, but they cost nothing to publish
+    # and they are the only genuinely operational thing FRR reports here.
+    fields["invoked"] = str(rule.get("invoked", 0))
+    fields["cpu_time_ms"] = str(rule.get("cpuTimeMS", 0))
+    return fields
+
 # Per-session counters, keyed the same way as the applied table because they come
 # from the same 'show bgp vrf all neighbors json' scrape, which covers every VRF.
 # They share APPLIED_META_KEY as their freshness marker rather than carrying one
@@ -178,6 +262,10 @@ class BgpStateGet:
         self.new_stats_state = {}
         # dic af_stats_state maps (vrf, peer, afi_safi) to the prefix counter
         # fields last published to BGP_NEIGH_AF_STATS, change gated the same way
+        self.route_map_state = {}
+        self.new_route_map_state = {}
+        self.route_map_set_state = {}
+        self.new_route_map_set_state = {}
         self.af_stats_state = {}
         self.new_af_stats_state = {}
         self.cached_timestamp = 0
@@ -189,6 +277,9 @@ class BgpStateGet:
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % STATS_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % AF_STATS_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, APPLIED_META_KEY)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % ROUTE_MAP_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % ROUTE_MAP_SET_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, ROUTE_MAP_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
     # A quick way to check if there are anything happening within BGP is to
@@ -584,6 +675,93 @@ class BgpStateGet:
         self.af_stats_state = {entry: dict(fields)
                               for entry, fields in self.new_af_stats_state.items()}
 
+    # Take a new snapshot of the route-maps FRR has applied. Returns True only
+    # when the snapshot is usable, so a failed scrape cannot be mistaken for
+    # "FRR holds no route-maps" and wipe the tables.
+    def get_all_route_map_states(self):
+        cmd = ["vtysh", "-H", "/dev/null", "-c", 'show route-map json']
+        try:
+            rc, output = getstatusoutput_noshell(cmd)
+            if rc:
+                syslog.syslog(syslog.LOG_WARNING,
+                              "*WARNING* Failed with rc:{} when execute: {}".format(rc, cmd))
+                return False
+            if len(output) == 0:
+                syslog.syslog(syslog.LOG_WARNING, "*WARNING* output none when execute: {}".format(cmd))
+                return False
+            daemons = json.loads(output)
+        except Exception as e:
+            syslog.syslog(syslog.LOG_WARNING,
+                          "*WARNING* An unexpected error occurred: {} when execute: {}".format(e, cmd))
+            return False
+
+        # The bgpd view and only that. FRR reports a route-map under every
+        # daemon that could use it, and each reports only the clauses its own
+        # daemon understands: for the same statement ospfd reports no set
+        # clauses where bgpd reports "local-preference 250". Reading zebra or
+        # ospfd would silently drop every BGP set clause.
+        maps = daemons.get("bgpd", {})
+        if not isinstance(maps, dict):
+            return False
+
+        self.new_route_map_state = {}
+        self.new_route_map_set_state = {}
+        for name, body in maps.items():
+            if not isinstance(body, dict):
+                continue
+            self.new_route_map_set_state[name] = {
+                "invoked": str(body.get("invoked", 0)),
+                "cpu_time_ms": str(body.get("cpuTimeMS", 0)),
+            }
+            for rule in body.get("rules", []):
+                seq = str(rule.get("sequenceNumber", ""))
+                if not seq:
+                    continue
+                self.new_route_map_state[(name, seq)] = route_map_rule_fields(rule)
+        return True
+
+    # Publish the snapshot, one row per rule plus one per map. Gated on the
+    # whole field set the way the applied neighbor table is, so an unchanged
+    # route-map costs no Redis write however often it is scraped.
+    def update_route_map_states(self):
+        ops = []
+        for entry, fields in self.new_route_map_state.items():
+            previous = self.route_map_state.get(entry)
+            if previous != fields:
+                ops.append(RowOp("%s|%s|%s" % (ROUTE_MAP_TABLE, entry[0], entry[1]),
+                                 fields, departed_fields(previous, fields)))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        for entry in self.route_map_state:
+            if entry not in self.new_route_map_state:
+                ops.append(RowOp("%s|%s|%s" % (ROUTE_MAP_TABLE, entry[0], entry[1]), None, ()))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+
+        for name, fields in self.new_route_map_set_state.items():
+            previous = self.route_map_set_state.get(name)
+            if previous != fields:
+                ops.append(RowOp("%s|%s" % (ROUTE_MAP_SET_TABLE, name),
+                                 fields, departed_fields(previous, fields)))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        for name in self.route_map_set_state:
+            if name not in self.new_route_map_set_state:
+                ops.append(RowOp("%s|%s" % (ROUTE_MAP_SET_TABLE, name), None, ()))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+
+        # Always refreshed, so an absent field reads as "FRR has no value"
+        # rather than "the producer has not sampled yet".
+        ops.append(RowOp(ROUTE_MAP_META_KEY, {'last_sync': str(int(time.time()))}, ()))
+        self.flush_applied_pipe(ops)
+
+        self.route_map_state = {entry: dict(fields)
+                                for entry, fields in self.new_route_map_state.items()}
+        self.route_map_set_state = {name: dict(fields)
+                                    for name, fields in self.new_route_map_set_state.items()}
+
+
 def main():
 
     syslog.syslog(syslog.LOG_INFO, "bgpmon service started")
@@ -613,6 +791,10 @@ def main():
             bgp_state_get.update_stats_states()
             bgp_state_get.update_af_stats_states()
             bgp_state_get.update_applied_states()
+        # The route-maps come from their own vtysh call and carry their own
+        # marker, so a failure here cannot affect the neighbor tables.
+        if bgp_state_get.get_all_route_map_states():
+            bgp_state_get.update_route_map_states()
 
 if __name__ == '__main__':
     main()
