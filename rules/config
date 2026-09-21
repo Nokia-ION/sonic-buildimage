@@ -89,6 +89,9 @@ BMC_ROOT_ACCOUNT_DEFAULT_PASSWORD ?=
 # ENABLE_ZTP - installs Zero Touch Provisioning support.
 # ENABLE_ZTP = y
 
+# INCLUDE_BOOTZ_DISCOVERY - installs the bootz DHCP discovery service.
+# INCLUDE_BOOTZ_DISCOVERY = y
+
 # INCLUDE_PDE - Enable platform development environment
 # INCLUDE_PDE = y
 # SHUTDOWN_BGP_ON_START - if set to y all bgp sessions will be in admin down state when

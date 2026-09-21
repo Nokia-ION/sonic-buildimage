@@ -8,15 +8,6 @@ import json
 import sys
 import subprocess
 
-def get_control_card():
-   # XXX: sample values until resolution on obtaining inventory info
-   card = {
-      "serial_number": "sno123",
-      "part_number": "part123",
-      "slot_id": "1"
-   }
-   return card
-
 def get_cli_output(cmd):
    """Helper to run a shell command and return output."""
    try:
@@ -61,26 +52,24 @@ def get_chassis_metadata():
 
 def main():
    """Extract SONiC chassis metadata."""
-   metadata = { "chassis": {}, "control_cards": [] }
-
    try:
       # Primary method using Platform API
-      metadata[ "chassis" ] = get_chassis_metadata()
+      metadata = get_chassis_metadata()
 
    except ( ImportError, AttributeError, RuntimeError ) as e:
       sys.stderr.write( f"Unexpected error: {str(e)}\n" )
       # If Platform fails, fallback to CLI
-      metadata[ "chassis" ] = get_chassis_metadata_via_cli()
+      metadata = get_chassis_metadata_via_cli()
 
    except Exception as e: # pylint: disable=broad-except
       sys.stderr.write( f"Unexpected error: {str(e)}\n" )
-      # Chassis unavailable, set default, possibly sufficient info from control-cards
-      metadata["chassis"] = {
+      metadata = {
          "part_number": "Unknown",
          "chassis_serial_number": "Unknown",
       }
 
-   metadata[ "control_cards" ].append( get_control_card() )
+   # Fixed chassis: bootz validates a global serial number instead of cards.
+   metadata[ "control_cards" ] = []
 
    # Success, write the valid JSON to stdout
    print( json.dumps( metadata, indent=2 ) )

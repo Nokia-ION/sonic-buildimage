@@ -1,0 +1,14 @@
+[Unit]
+Description=Bootz Discovery Service
+After=network-online.target rc-local.service
+Wants=network-online.target
+Before=bootz.service
+
+[Service]
+Type=idle
+ExecStart=/usr/bin/bootz-discovery.sh
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

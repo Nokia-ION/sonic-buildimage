@@ -1,1 +1,2 @@
 build/bin/bootz-client usr/bin
+bootz-get-chassis.py usr/local/bin
