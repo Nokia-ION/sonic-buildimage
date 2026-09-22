@@ -45,5 +45,12 @@
     },
     "GNMI_TABLE_WITH_DEFAULT_VRF_CORRECT": {
         "desc": "TABLE WITH DEFAULT VRF."
+    },
+    "GNMI_TABLE_WITH_VALID_CERTIFICATE_ID": {
+        "desc": "TABLE WITH VALID CERTIFICATE_ID."
+    },
+    "GNMI_TABLE_WITH_INCORRECT_CERTIFICATE_ID": {
+        "desc": "TABLE_WITH_INCORRECT_CERTIFICATE_ID failure.",
+        "eStrKey": "Pattern"
     }
 }
