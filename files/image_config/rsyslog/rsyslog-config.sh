@@ -73,6 +73,62 @@ if [ -d /etc/sonic/ssl-certs ]; then
 fi
 ssl_profiles_json="${ssl_profiles_json}}"
 
+ssl_profile_ready() {
+    local id="$1"
+    local d="/etc/sonic/ssl-certs/${id}"
+    [ -n "$id" ] && [ -f "${d}/ca-bundle.pem" ] && [ -f "${d}/cert.pem" ] && [ -f "${d}/key.pem" ]
+}
+
+# Mirror hostcfgd RSyslogCfg._publish_tls_apply_state so Certz PEM install
+# (rsyslog-config restart without a CONFIG_DB SYSLOG_SERVER change) still
+# updates STATE_DB SYSLOG_SERVER|<addr> applied_transport_security.
+publish_syslog_tls_apply_state() {
+    local apply_ok="$1"
+    local key proto ts profile applied reason proto_lc ts_lc k found
+
+    mapfile -t cfg_keys < <(sonic-db-cli CONFIG_DB KEYS "SYSLOG_SERVER|*" 2>/dev/null || true)
+
+    while IFS= read -r k; do
+        [ -n "$k" ] || continue
+        found=0
+        for key in "${cfg_keys[@]}"; do
+            if [ "$k" = "$key" ]; then
+                found=1
+                break
+            fi
+        done
+        if [ "$found" -eq 0 ]; then
+            sonic-db-cli STATE_DB DEL "$k" >/dev/null 2>&1 || true
+        fi
+    done < <(sonic-db-cli STATE_DB KEYS "SYSLOG_SERVER|*" 2>/dev/null || true)
+
+    for key in "${cfg_keys[@]}"; do
+        [ -n "$key" ] || continue
+        proto=$(sonic-db-cli CONFIG_DB HGET "$key" protocol 2>/dev/null || true)
+        ts=$(sonic-db-cli CONFIG_DB HGET "$key" transport_security 2>/dev/null || true)
+        profile=$(sonic-db-cli CONFIG_DB HGET "$key" tls_profile_id 2>/dev/null || true)
+        applied="false"
+        reason="NONE"
+        proto_lc=$(printf '%s' "$proto" | tr '[:upper:]' '[:lower:]')
+        ts_lc=$(printf '%s' "$ts" | tr '[:upper:]' '[:lower:]')
+        if [ "$proto_lc" = "tls" ] || [ "$ts_lc" = "true" ] || [ "$ts_lc" = "tls" ] || \
+           [ "$ts_lc" = "enabled" ] || [ "$ts_lc" = "1" ]; then
+            if [ -z "$profile" ]; then
+                reason="NO_PROFILE"
+            elif ! ssl_profile_ready "$profile"; then
+                reason="NO_CERTIFICATE"
+            elif [ "$apply_ok" != "true" ]; then
+                reason="RSYSLOG_APPLY_FAILED"
+            else
+                applied="true"
+                reason="NONE"
+            fi
+        fi
+        sonic-db-cli STATE_DB HSET "$key" applied_transport_security "$applied" >/dev/null 2>&1 || true
+        sonic-db-cli STATE_DB HSET "$key" failure_reason "$reason" >/dev/null 2>&1 || true
+    done
+}
+
 # Generate temporary config to validate output before overwriting
 # /etc/rsyslog.conf
 TMPFILE=$(mktemp /tmp/rsyslog.conf.XXXXXX)
@@ -102,7 +158,9 @@ sonic-cfggen -d -t /usr/share/sonic/templates/rsyslog.conf.j2 \
 
 if ! cp "$TMPFILE" /etc/rsyslog.conf; then
     echo "Failed to update /etc/rsyslog.conf; not restarting rsyslog" >&2
+    publish_syslog_tls_apply_state false
     exit 1
 fi
 
 systemctl restart rsyslog
+publish_syslog_tls_apply_state true
