@@ -252,5 +252,39 @@
                 }
             }
         }
+    },
+    "GNMI_TABLE_WITH_VALID_CERTIFICATE_ID": {
+        "sonic-gnmi:sonic-gnmi": {
+            "sonic-gnmi:GNMI": {
+                "certs": {
+                    "ca_crt": "/etc/sonic/credentials/dsmsroot.cer",
+                    "server_crt": "/etc/sonic/credentials/server.cer",
+                    "server_key": "/etc/sonic/credentials/server.key"
+                },
+                "gnmi": {
+                    "client_auth": "true",
+                    "log_level": "2",
+                    "port": "50052",
+                    "certificate_id": "gnxi"
+                }
+            }
+        }
+    },
+    "GNMI_TABLE_WITH_INCORRECT_CERTIFICATE_ID": {
+        "sonic-gnmi:sonic-gnmi": {
+            "sonic-gnmi:GNMI": {
+                "certs": {
+                    "ca_crt": "/etc/sonic/credentials/dsmsroot.cer",
+                    "server_crt": "/etc/sonic/credentials/server.cer",
+                    "server_key": "/etc/sonic/credentials/server.key"
+                },
+                "gnmi": {
+                    "client_auth": "true",
+                    "log_level": "2",
+                    "port": "50052",
+                    "certificate_id": "bad profile/id"
+                }
+            }
+        }
     }
 }

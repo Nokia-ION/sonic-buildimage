@@ -20,6 +20,9 @@ module sonic-gnmi {
 
     description "GNMI YANG Module for SONiC OS";
 
+    revision 2026-09-18 {
+        description "Add certificate_id to select the served gNSI Certz SSL profile";
+    }
     revision 2025-09-01 {
         description "Add VRF support for GNMI service";
     }
@@ -93,6 +96,13 @@ module sonic-gnmi {
                     }
                     default 32;
                     description "DSCP (0..63) applied to the gRPC (gNMI/gNOI/gNSI) traffic served by the gNMI server. Equivalent of the vendor 'qos dscp' knob; the server derives the IP ToS / IPv6 Traffic-Class byte from it. Default 32 (AF41).";
+                }
+
+                leaf certificate_id {
+                    type string {
+                        pattern '[a-zA-Z0-9._-]+';
+                    }
+                    description "gNSI Certz SSL profile that the gNMI server presents to clients. Model-driven equivalent of the OpenConfig /system/grpc-servers/grpc-server/config/certificate-id leaf. The value must name a profile the device holds credentials for; when unset the default 'gnxi' profile is served.";
                 }
 
                 leaf save_on_set {
