@@ -15,15 +15,19 @@ DEFAULT_USERS_FILE=/etc/sonic/default_users.json
 PERMLOG=/var/log/systemlog
 SONIC_VERSION=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version)
 SONIC_OVERLAY_UPPERDIR="/host/image-$SONIC_VERSION/rw/etc/sonic"
+ZTP_DIR=/host/ztp
+CERT_DIRS="/etc/sonic/telemetry/ /etc/sonic/ssl-certs/ /etc/sonic/credentials/"
 
 SERVICES_STOPPED=0
+ZTP_MODE=0
+RETAIN_CERTS=0
 trap "error_cleanup" HUP INT QUIT PIPE TERM
 
 # Command usage and help
 usage()
 {
     cat << EOF
- Usage:  reset-factory < keep-all-config | only-config | keep-basic >
+ Usage:  reset-factory [--ztp] [--retain-certs] < keep-all-config | only-config | keep-basic >
 
         Create factory default configuration and save it to
         to ${CONFIG_DB_JSON}.
@@ -33,6 +37,11 @@ usage()
         keep-all-config  - Preserves all configurations after boot. Logs and files will be deleted.
         only-config      - Reset configurations to factory default. Logs and files will be preserved.
         keep-basic       - Preserves basic configurations only after boot. Logs and files will be deleted.
+
+        --ztp            - Only valid with the default type. Do not create ${CONFIG_DB_JSON} and clear
+                           ${ZTP_DIR}, so config-setup starts Zero Touch Provisioning on next boot
+                           (or creates the factory default configuration if ZTP is not installed).
+        --retain-certs   - Keep certificates under: ${CERT_DIRS}
 EOF
 }
 
@@ -71,7 +80,12 @@ error_cleanup()
 clear_sonic_dir()
 {
     EXCLUDE_LIST="${CONFIG_DB_JSON}\|/etc/sonic/sonic-environment"
-    find $SONIC_OVERLAY_UPPERDIR -type f | grep -ve ${EXCLUDE_LIST} | xargs rm -rf
+    if [ $RETAIN_CERTS -eq 1 ]; then
+        for dir in ${CERT_DIRS}; do
+            EXCLUDE_LIST="${EXCLUDE_LIST}\|${dir}"
+        done
+    fi
+    find $SONIC_OVERLAY_UPPERDIR \( -type f -o -type l \) | grep -ve ${EXCLUDE_LIST} | xargs rm -rf
     # remount root
     mount -o remount /
 }
@@ -113,14 +127,47 @@ if [ $UID != 0 ]; then
     exit 1
 fi
 
-CMD=$1
+CMD=
 FACTORY_TYPE=
+
+for arg in "$@"; do
+    case "$arg" in
+        --ztp)
+            ZTP_MODE=1
+            ;;
+        --retain-certs)
+            RETAIN_CERTS=1
+            ;;
+        *)
+            if [ -n "$CMD" ]; then
+                usage
+                exit 1
+            fi
+            CMD=$arg
+            ;;
+    esac
+done
 
 if [ "$CMD" = "keep-all-config" ] || [ "$CMD" = "only-config" ] || \
    [ "$CMD" = "keep-basic" ] || [ -z "$CMD" ]; then
     FACTORY_TYPE=$CMD
 else
     usage
+    exit 1
+fi
+
+if [ $ZTP_MODE -eq 1 ] && [ -n "$FACTORY_TYPE" ]; then
+    usage
+    exit 1
+fi
+
+# config-setup boot skips config initialization on multi-asic platforms, so
+# a missing config_db.json would leave the switch without any configuration.
+[ -f /etc/sonic/sonic-environment ] && . /etc/sonic/sonic-environment
+PLATFORM=${PLATFORM:-$(sonic-cfggen -H -v DEVICE_METADATA.localhost.platform)}
+[ -f /usr/share/sonic/device/$PLATFORM/asic.conf ] && . /usr/share/sonic/device/$PLATFORM/asic.conf
+if [ $ZTP_MODE -eq 1 ] && [ ${NUM_ASIC:-1} -gt 1 ]; then
+    echo "reset-factory: --ztp is not supported on multi-asic platforms"
     exit 1
 fi
 
@@ -145,11 +192,18 @@ if [ "$FACTORY_TYPE" != "keep-basic" ] && [ "$FACTORY_TYPE" != "keep-all-config"
     rm -f ${CONFIG_DB_JSON}
 fi
 
-echo "Call config-setup factory"
-config-setup factory $FACTORY_TYPE
-rc=$?
-if [ $rc -ne 0 ]; then
-    error_cleanup
+if [ $ZTP_MODE -eq 1 ]; then
+    # config-setup boot starts ZTP (or builds the factory default when ZTP
+    # is not installed) only when config_db.json is missing at boot.
+    echo "Clear ZTP state and leave ${CONFIG_DB_JSON} absent for next boot"
+    rm -rf ${ZTP_DIR}
+else
+    echo "Call config-setup factory"
+    config-setup factory $FACTORY_TYPE
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        error_cleanup
+    fi
 fi
 
 if [ "$FACTORY_TYPE" != "only-config" ]; then
@@ -193,5 +247,11 @@ if [ "$FACTORY_TYPE" != "only-config" ]; then
     rm -rf /var/log/lastlog.*
     cat /dev/null > /var/log/lastlog
 fi
+
+# The reset is complete. The SIGTERM delivered while the system shuts down
+# must not run error_cleanup, which would restore the old config_db.json.
+trap - HUP INT QUIT PIPE TERM
+rm -f ${TEMP_CFG}
+TEMP_CFG=
 
 run_reboot
