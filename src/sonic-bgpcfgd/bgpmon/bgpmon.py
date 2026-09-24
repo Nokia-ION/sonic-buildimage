@@ -86,6 +86,14 @@ ROUTE_MAP_SET_TABLE = "ROUTE_MAP_SET_APPLIED"
 # separate vtysh call, so one marker could not honestly vouch for both.
 ROUTE_MAP_META_KEY = "ROUTE_MAP_APPLIED_META|global"
 
+# Applied static routes, read from FRR rather than from CONFIG_DB. The field
+# names match the CONFIG_DB STATIC_ROUTE ones and the key is spelled
+# <vrf>|<prefix> exactly as that table spells it, so a consumer decodes the
+# applied state the way it decodes the configured state, from another table.
+STATIC_ROUTE_TABLE = "STATIC_ROUTE_APPLIED"
+# Its own marker again, for the same reason: its own vtysh calls.
+STATIC_ROUTE_META_KEY = "STATIC_ROUTE_APPLIED_META|global"
+
 
 def parse_route_map_match(clause):
     """One rendered match clause to a (field, value) pair, or None.
@@ -156,6 +164,44 @@ def route_map_rule_fields(rule):
     fields["invoked"] = str(rule.get("invoked", 0))
     fields["cpu_time_ms"] = str(rule.get("cpuTimeMS", 0))
     return fields
+
+def static_route_fields(entry):
+    """Every published field for one route FRR reports as static.
+
+    nexthop and ifname are comma joined in the order FRR lists the next-hops,
+    which is how CONFIG_DB spells a multipath route, so one route is one row
+    here as it is there. A next-hop that names only an interface, or only a
+    blackhole, still takes its position in both lists, because a consumer pairs
+    them by position.
+    """
+    ips = []
+    ifnames = []
+    blackhole = False
+    for nexthop in entry.get("nexthops", []):
+        if nexthop.get("blackhole"):
+            blackhole = True
+        ips.append(nexthop.get("ip", ""))
+        ifnames.append(nexthop.get("interfaceName", ""))
+
+    fields = {
+        "nexthop": ",".join(ips),
+        "ifname": ",".join(ifnames),
+        "blackhole": "true" if blackhole else "false",
+        "distance": str(entry.get("distance", "")),
+    }
+    # FRR carries one tag for the whole route rather than one per next-hop, so
+    # this is a single value where the CONFIG_DB field can be a list.
+    if entry.get("tag") is not None:
+        fields["tag"] = str(entry["tag"])
+    # No OpenConfig leaf carries these yet. They are published because they are
+    # what makes this an applied view rather than a copy of the configuration:
+    # a route FRR holds but has not installed is exactly what a state path
+    # should be able to report.
+    fields["installed"] = "true" if entry.get("installed") else "false"
+    fields["selected"] = "true" if entry.get("selected") else "false"
+    fields["metric"] = str(entry.get("metric", 0))
+    return fields
+
 
 # Per-session counters, keyed the same way as the applied table because they come
 # from the same 'show bgp vrf all neighbors json' scrape, which covers every VRF.
@@ -266,6 +312,8 @@ class BgpStateGet:
         self.new_route_map_state = {}
         self.route_map_set_state = {}
         self.new_route_map_set_state = {}
+        self.static_route_state = {}
+        self.new_static_route_state = {}
         self.af_stats_state = {}
         self.new_af_stats_state = {}
         self.cached_timestamp = 0
@@ -280,6 +328,8 @@ class BgpStateGet:
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % ROUTE_MAP_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % ROUTE_MAP_SET_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, ROUTE_MAP_META_KEY)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % STATIC_ROUTE_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, STATIC_ROUTE_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
     # A quick way to check if there are anything happening within BGP is to
@@ -761,6 +811,77 @@ class BgpStateGet:
         self.route_map_set_state = {name: dict(fields)
                                     for name, fields in self.new_route_map_set_state.items()}
 
+    def get_all_static_route_states(self):
+        """FRR's static routes, both families, every VRF.
+
+        Two calls, because 'show ip route' and 'show ipv6 route' are separate
+        commands, and both in their 'vrf all' form, which keys the dump by VRF
+        name and so covers instances beyond default in one go. A failure in
+        either abandons the whole snapshot rather than publishing half of it:
+        publishing one family alone would withdraw the other family's rows as
+        though FRR had dropped them.
+        """
+        routes = {}
+        for cmd in (["vtysh", "-H", "/dev/null", "-c", 'show ip route vrf all static json'],
+                    ["vtysh", "-H", "/dev/null", "-c", 'show ipv6 route vrf all static json']):
+            try:
+                rc, output = getstatusoutput_noshell(cmd)
+                if rc:
+                    syslog.syslog(syslog.LOG_WARNING,
+                                  "*WARNING* Failed with rc:{} when execute: {}".format(rc, cmd))
+                    return False
+                if len(output) == 0:
+                    syslog.syslog(syslog.LOG_WARNING, "*WARNING* output none when execute: {}".format(cmd))
+                    return False
+                vrfs = json.loads(output)
+            except Exception as e:
+                syslog.syslog(syslog.LOG_WARNING,
+                              "*WARNING* An unexpected error occurred: {} when execute: {}".format(e, cmd))
+                return False
+
+            if not isinstance(vrfs, dict):
+                return False
+            for vrf, prefixes in vrfs.items():
+                if not isinstance(prefixes, dict):
+                    continue
+                for prefix, entries in prefixes.items():
+                    for entry in entries:
+                        # The command filters to static already; this keeps a
+                        # route of another protocol out of the table if it ever
+                        # stops doing so.
+                        if entry.get("protocol") != "static":
+                            continue
+                        routes[(vrf, prefix)] = static_route_fields(entry)
+
+        self.new_static_route_state = routes
+        return True
+
+    # Publish the snapshot, one row per route, gated on the whole field set the
+    # way the other applied tables are, so an unchanged route costs no Redis
+    # write however often it is scraped.
+    def update_static_route_states(self):
+        ops = []
+        for entry, fields in self.new_static_route_state.items():
+            previous = self.static_route_state.get(entry)
+            if previous != fields:
+                ops.append(RowOp("%s|%s|%s" % (STATIC_ROUTE_TABLE, entry[0], entry[1]),
+                                 fields, departed_fields(previous, fields)))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        for entry in self.static_route_state:
+            if entry not in self.new_static_route_state:
+                ops.append(RowOp("%s|%s|%s" % (STATIC_ROUTE_TABLE, entry[0], entry[1]), None, ()))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+
+        # Always refreshed, so an absent row reads as "FRR is not holding this
+        # route" rather than "the producer has not sampled yet".
+        ops.append(RowOp(STATIC_ROUTE_META_KEY, {'last_sync': str(int(time.time()))}, ()))
+        self.flush_applied_pipe(ops)
+
+        self.static_route_state = {entry: dict(fields)
+                                   for entry, fields in self.new_static_route_state.items()}
+
 
 def main():
 
@@ -795,6 +916,10 @@ def main():
         # marker, so a failure here cannot affect the neighbor tables.
         if bgp_state_get.get_all_route_map_states():
             bgp_state_get.update_route_map_states()
+        # Static routes likewise: their own calls and their own marker, so a
+        # failure here leaves the other tables alone.
+        if bgp_state_get.get_all_static_route_states():
+            bgp_state_get.update_static_route_states()
 
 if __name__ == '__main__':
     main()
