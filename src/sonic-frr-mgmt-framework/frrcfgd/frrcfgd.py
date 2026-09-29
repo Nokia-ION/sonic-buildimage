@@ -1820,6 +1820,7 @@ class BGPConfigDaemon:
                       ('med_missing_as_worst',                          '{no:no-prefix}bgp bestpath med missing-as-worst', ['true', 'false']),
                       ('compare_confed_as_path',                        '{no:no-prefix}bgp bestpath as-path confed', ['true', 'false']),
                       ('default_ipv4_unicast',                          '{no:no-prefix}bgp default ipv4-unicast', ['true', 'false']),
+                      ('default_ipv6_unicast',                          '{no:no-prefix}bgp default ipv6-unicast', ['true', 'false']),
                       ('max_ebgp_paths',                                '{no:no-prefix}maximum-paths {}'),
                       (['max_ibgp_paths',
                         '+ibgp_equal_cluster_length'],                  '{no:no-prefix}maximum-paths ibgp {} {:match-clust-len}', hdl_ibgp_maxpath),
