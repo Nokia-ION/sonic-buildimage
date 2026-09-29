@@ -94,6 +94,10 @@ STATIC_ROUTE_TABLE = "STATIC_ROUTE_APPLIED"
 # Its own marker again, for the same reason: its own vtysh calls.
 STATIC_ROUTE_META_KEY = "STATIC_ROUTE_APPLIED_META|global"
 
+# Applied BGP global state per VRF, from the FRR summary rather than CONFIG_DB.
+GLOBALS_APPLIED_TABLE = "BGP_GLOBALS_APPLIED"
+GLOBALS_APPLIED_META_KEY = "BGP_GLOBALS_APPLIED_META|global"
+
 
 def parse_route_map_match(clause):
     """One rendered match clause to a (field, value) pair, or None.
@@ -316,6 +320,8 @@ class BgpStateGet:
         self.new_static_route_state = {}
         self.af_stats_state = {}
         self.new_af_stats_state = {}
+        self.globals_applied_state = {}
+        self.new_globals_applied_state = {}
         self.cached_timestamp = 0
         self.db = swsscommon.SonicV2Connector(use_unix_socket_path=True)
         self.db.connect(self.db.STATE_DB, False)
@@ -330,6 +336,8 @@ class BgpStateGet:
         self.db.delete_all_by_pattern(self.db.STATE_DB, ROUTE_MAP_META_KEY)
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % STATIC_ROUTE_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, STATIC_ROUTE_META_KEY)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % GLOBALS_APPLIED_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, GLOBALS_APPLIED_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
     # A quick way to check if there are anything happening within BGP is to
@@ -588,6 +596,90 @@ class BgpStateGet:
     # Take a new snapshot of the applied neighbor configuration. Returns True
     # only when the snapshot is usable, so a failed scrape cannot be mistaken
     # for "FRR reports no neighbors" and wipe the table.
+    def build_globals_applied_fields(self, vrf_summary):
+        """Map one vrf's summary JSON onto BGP_GLOBALS_APPLIED fields."""
+        if not isinstance(vrf_summary, dict):
+            return {}
+        fields = {}
+        router_id = vrf_summary.get('routerId')
+        asn = vrf_summary.get('as')
+        total_pfx = 0
+        total_paths = 0
+        for af_key in ('ipv4Unicast', 'ipv6Unicast'):
+            af = vrf_summary.get(af_key)
+            if not isinstance(af, dict):
+                continue
+            if not router_id:
+                rid = af.get('routerId')
+                if rid:
+                    router_id = rid
+            if asn is None:
+                af_as = af.get('as')
+                if af_as is not None:
+                    asn = af_as
+            tr = af.get('totalRoutes')
+            if tr is None:
+                tr = af.get('ribCount')
+            if tr is not None:
+                total_pfx += int(tr)
+            tp = af.get('totalPaths')
+            if tp is not None:
+                total_paths += int(tp)
+        if router_id:
+            fields['router_id'] = str(router_id)
+        if asn is not None:
+            fields['local_asn'] = str(asn)
+        if total_pfx:
+            fields['total_prefixes'] = str(total_pfx)
+        if total_paths:
+            fields['total_paths'] = str(total_paths)
+        return fields
+
+    def get_all_globals_applied_states(self):
+        cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp vrf all summary json']
+        try:
+            rc, output = getstatusoutput_noshell(cmd)
+            if rc:
+                syslog.syslog(syslog.LOG_WARNING,
+                              "*WARNING* Failed with rc:{} when execute: {}".format(rc, cmd))
+                return False
+            if len(output) == 0:
+                syslog.syslog(syslog.LOG_WARNING, "*WARNING* output none when execute: {}".format(cmd))
+                return False
+            vrf_info = json.loads(output)
+        except Exception as e:
+            syslog.syslog(syslog.LOG_WARNING,
+                          "*WARNING* An unexpected error occurred: {} when execute: {}".format(e, cmd))
+            return False
+
+        self.new_globals_applied_state.clear()
+        for vrf, vrf_dict in vrf_info.items():
+            if not isinstance(vrf_dict, dict):
+                continue
+            fields = self.build_globals_applied_fields(vrf_dict)
+            if fields:
+                self.new_globals_applied_state[vrf] = fields
+        return True
+
+    def update_globals_applied_states(self):
+        ops = []
+        for vrf, fields in self.new_globals_applied_state.items():
+            previous = self.globals_applied_state.get(vrf)
+            if previous != fields:
+                ops.append(RowOp("%s|%s" % (GLOBALS_APPLIED_TABLE, vrf),
+                                 fields, departed_fields(previous, fields)))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        for vrf in self.globals_applied_state:
+            if vrf not in self.new_globals_applied_state:
+                ops.append(RowOp("%s|%s" % (GLOBALS_APPLIED_TABLE, vrf), None, ()))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        ops.append(RowOp(GLOBALS_APPLIED_META_KEY, {'last_sync': str(int(time.time()))}, ()))
+        self.flush_applied_pipe(ops)
+        self.globals_applied_state = {vrf: dict(fields)
+                                        for vrf, fields in self.new_globals_applied_state.items()}
+
     def get_all_applied_states(self):
         cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp vrf all neighbors json']
         try:
@@ -903,6 +995,8 @@ def main():
         # that FRR accepts without logging would otherwise never be scraped, and
         # the applied values would stay stale indefinitely. The write itself is
         # still change gated, so an idle system does not add Redis writes.
+        if bgp_state_get.get_all_globals_applied_states():
+            bgp_state_get.update_globals_applied_states()
         if bgp_state_get.get_all_applied_states():
             # Counters go first because the freshness marker both tables share is
             # written at the end of update_applied_states. Writing the marker
