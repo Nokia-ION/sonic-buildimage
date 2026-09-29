@@ -546,6 +546,14 @@ class BgpStateGet:
             if updates_sent is not None:
                 fields['updates_sent'] = str(updates_sent)
 
+        err_hex = peer_info.get('lastErrorCodeSubcode')
+        if isinstance(err_hex, str) and len(err_hex) >= 2:
+            try:
+                code = int(err_hex[0:2], 16)
+                fields['last_notification_error_code'] = str(code)
+            except ValueError:
+                pass
+
         return fields
 
     # Map one address family entry of one peer onto the BGP_NEIGH_AF_STATS
