@@ -214,6 +214,18 @@ if [ -n "$USER_AUTH" ] && [ "$USER_AUTH" != "null" ]; then
     fi
 fi
 
+# gNSI authz keeps its policy and version metadata in the read-write telemetry
+# directory (bind-mounted from the host in rules/docker-gnmi.mk) so that both
+# survive container restarts and reboots. Policy principals come from TLS
+# client certificates, so enforcement is only enabled when the server runs
+# with TLS. Set GNMI|gnmi:authz_policy_enabled to "false" to opt out.
+TELEMETRY_ARGS+=" --authorization_policy_file /etc/sonic/telemetry/authz_policy.json"
+TELEMETRY_ARGS+=" --authz_meta /etc/sonic/telemetry/authz-version.json"
+AUTHZ_POLICY_ENABLED=$(extract_field "$GNMI" '.authz_policy_enabled')
+if [[ -n "$SERVER_CRT" && -n "$SERVER_KEY" && "$DPU_EPHEMERAL_TLS" != "true" && "$AUTHZ_POLICY_ENABLED" != "false" ]]; then
+    TELEMETRY_ARGS+=" --authz_policy_enabled"
+fi
+
 # gNOI OS Install streams the image into --img_dir before the host-side
 # sonic-host-service installs it with sonic-installer. That directory must be
 # visible to BOTH the container and the host, so use the /var/tmp bind mount
