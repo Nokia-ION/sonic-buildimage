@@ -222,6 +222,12 @@ module sonic-bgp-global {
                         "Activate ipv4-unicast for a peer by default";
                 }
 
+                leaf default_ipv6_unicast {
+                    type boolean;
+                    description
+                        "Activate ipv6-unicast for a peer by default";
+                }
+
                 leaf max_ebgp_paths {
                     type uint16 {
                         range "1..256";
