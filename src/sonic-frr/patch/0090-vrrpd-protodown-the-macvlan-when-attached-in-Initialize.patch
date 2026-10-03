@@ -1,0 +1,27 @@
+From 7a1c2e9f0b3d4c5e6f708192a3b4c5d6e7f80911 Mon Sep 17 00:00:00 2001
+From: brajarat <balachandar.rajarathinam@nokia.com>
+Date: Fri, 2 Oct 2026 13:55:00 +0530
+Subject: [PATCH] vrrpd: protodown the macvlan when attached in Initialize
+
+---
+ vrrpd/vrrp.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/vrrpd/vrrp.c b/vrrpd/vrrp.c
+index 0c10e465d6..cccea69fc8 100644
+--- a/vrrpd/vrrp.c
++++ b/vrrpd/vrrp.c
+@@ -785,6 +785,10 @@ static bool vrrp_attach_interface(struct vrrp_router *r)
+ 
+ 	r->mvl_ifp = selection;
+ 
++	/* A killed Master leaves protodown off; only Master may own the vMAC */
++	if (r->mvl_ifp && r->fsm.state == VRRP_STATE_INITIALIZE)
++		vrrp_zclient_send_interface_protodown(r->mvl_ifp, true);
++
+ 	return !!r->mvl_ifp;
+ }
+ 
+-- 
+2.34.1
+
