@@ -168,7 +168,9 @@ def test_applied_fields_from_live_shape(bgp_mon):
             'peer_as': '65300',
             'peer_group': 'PG1',
             'local_address': '11.0.0.154',
-            'remote_address': '11.0.0.155'
+            'remote_address': '11.0.0.155',
+            'local_port': '48810',
+            'remote_port': '179'
         }
     }
 
@@ -206,6 +208,26 @@ def test_applied_unknown_addresses_are_dropped(bgp_mon):
     })
     assert 'local_address' not in fields
     assert 'remote_address' not in fields
+
+
+def test_applied_zero_ports_are_dropped(bgp_mon):
+    """FRR reports TCP port 0 when no socket is bound."""
+    fields = bgp_mon.build_applied_fields({
+        "portLocal": 0,
+        "portForeign": 0
+    })
+    assert 'local_port' not in fields
+    assert 'remote_port' not in fields
+
+
+def test_applied_ports_are_stringified(bgp_mon):
+    """portLocal/portForeign arrive as JSON numbers but Redis fields are strings."""
+    fields = bgp_mon.build_applied_fields({
+        "portLocal": 48810,
+        "portForeign": 179
+    })
+    assert fields['local_port'] == '48810'
+    assert fields['remote_port'] == '179'
 
 
 def test_applied_dynamic_peer_star_is_stripped(bgp_mon):
