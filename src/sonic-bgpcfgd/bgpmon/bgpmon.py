@@ -509,6 +509,27 @@ class BgpStateGet:
         if remote_addr and remote_addr != UNKNOWN_ADDR:
             fields['remote_address'] = remote_addr
 
+        # TCP ports from the same neighbor JSON. FRR reports 0 (or omits them)
+        # when no socket is bound; leave the Redis field out in that case so
+        # the consumer reports an absent leaf rather than port 0.
+        local_port = peer_info.get('portLocal')
+        if local_port is not None:
+            try:
+                port = int(local_port)
+            except (TypeError, ValueError):
+                port = 0
+            if 1 <= port <= 65535:
+                fields['local_port'] = str(port)
+
+        remote_port = peer_info.get('portForeign')
+        if remote_port is not None:
+            try:
+                port = int(remote_port)
+            except (TypeError, ValueError):
+                port = 0
+            if 1 <= port <= 65535:
+                fields['remote_port'] = str(port)
+
         # Absent until a session negotiates something, which keeps a peer that
         # never came up from reporting capabilities it only ever advertised.
         caps = negotiated_capabilities(peer_info.get('neighborCapabilities'))
