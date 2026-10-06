@@ -219,9 +219,10 @@ def static_route_fields(entry):
 # translation in translib.
 STATS_TABLE = "BGP_NEIGH_STATS"
 
-# Per-address-family prefix counters. FRR reports them per address family under
-# addressFamilyInfo, so the address family joins the key rather than being folded
-# into a field name, which keeps a row per (peer, address family) the way the
+# Per-address-family prefix counters and applied route-maps. FRR reports them
+# per address family under addressFamilyInfo, so the address family joins the
+# key rather than being folded into a field name, which keeps a row per (peer,
+# address family) the way the
 # OpenConfig afi-safi list is keyed and lets a consumer read one family without
 # parsing the other's fields. Shares APPLIED_META_KEY for the same reason
 # STATS_TABLE does: one scrape produces all three tables.
@@ -311,7 +312,8 @@ class BgpStateGet:
         self.stats_state = {}
         self.new_stats_state = {}
         # dic af_stats_state maps (vrf, peer, afi_safi) to the prefix counter
-        # fields last published to BGP_NEIGH_AF_STATS, change gated the same way
+        # and route-map fields last published to BGP_NEIGH_AF_STATS, change
+        # gated the same way
         self.route_map_state = {}
         self.new_route_map_state = {}
         self.route_map_set_state = {}
@@ -594,6 +596,17 @@ class BgpStateGet:
         if sent is not None:
             fields['prefixes_sent'] = str(sent)
 
+        # The route-maps FRR applies to this family. A peer-group member reports
+        # the ones it inherits, which its own BGP_NEIGHBOR_AF row does not carry,
+        # and FRR omits the key for a direction with no route-map. The name is
+        # reported whether or not a route-map of that name exists, as FRR does.
+        import_policy = af_info.get('routeMapForIncomingAdvertisements')
+        if import_policy:
+            fields['import_policy'] = import_policy
+        export_policy = af_info.get('routeMapForOutgoingAdvertisements')
+        if export_policy:
+            fields['export_policy'] = export_policy
+
         return fields
 
     def update_new_af_stats_states(self, vrf, peer, peer_info):
@@ -605,7 +618,7 @@ class BgpStateGet:
             if afi_safi is None or not isinstance(af_entry, dict):
                 continue
             fields = self.build_af_stats_fields(af_entry)
-            # A family FRR reports no counter at all for is left unpublished
+            # A family FRR reports no field at all for is left unpublished
             # rather than written as an empty row, so the removal pass below
             # deletes a row whose counters have gone away.
             if fields:

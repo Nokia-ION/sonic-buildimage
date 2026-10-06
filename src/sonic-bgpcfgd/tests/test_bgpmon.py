@@ -758,3 +758,75 @@ def test_af_stats_multiple_vrfs_are_keyed_separately(bgp_mon):
     assert scrape(bgp_mon, payload) is True
     assert bgp_mon.new_af_stats_state[("default", "11.0.0.155", "ipv4_unicast")]['prefixes_received'] == '7'
     assert bgp_mon.new_af_stats_state[("Vrf1", "11.0.0.155", "ipv4_unicast")]['prefixes_received'] == '31'
+
+
+def with_route_maps(payload, family, incoming=None, outgoing=None):
+    """A copy of payload with route-maps applied to one family of the peer, in
+    the keys FRR reports them under."""
+    payload = json.loads(json.dumps(payload))
+    af_entry = payload["default"]["11.0.0.155"]["addressFamilyInfo"][family]
+    if incoming is not None:
+        af_entry["inboundPathPolicyConfig"] = True
+        af_entry["routeMapForIncomingAdvertisements"] = incoming
+    if outgoing is not None:
+        af_entry["outboundPathPolicyConfig"] = True
+        af_entry["routeMapForOutgoingAdvertisements"] = outgoing
+    return payload
+
+
+def test_af_stats_route_maps_from_live_shape(bgp_mon):
+    """The route-maps FRR applies are published on the family's row, and only on
+    the family they are applied to."""
+    payload = with_route_maps(APPLIED_NEIGH_JSON, "ipv4Unicast", incoming="RM_IN", outgoing="RM_OUT")
+
+    assert scrape(bgp_mon, payload) is True
+    v4 = bgp_mon.new_af_stats_state[("default", "11.0.0.155", "ipv4_unicast")]
+    assert v4['import_policy'] == 'RM_IN'
+    assert v4['export_policy'] == 'RM_OUT'
+    v6 = bgp_mon.new_af_stats_state[("default", "11.0.0.155", "ipv6_unicast")]
+    assert 'import_policy' not in v6
+    assert 'export_policy' not in v6
+
+
+def test_af_stats_route_map_absent_direction_is_not_published(bgp_mon):
+    """FRR omits the key for a direction with no route-map, which must leave the
+    field out rather than publish an empty name."""
+    payload = with_route_maps(APPLIED_NEIGH_JSON, "ipv4Unicast", incoming="RM_IN")
+
+    assert scrape(bgp_mon, payload) is True
+    fields = bgp_mon.new_af_stats_state[("default", "11.0.0.155", "ipv4_unicast")]
+    assert fields['import_policy'] == 'RM_IN'
+    assert 'export_policy' not in fields
+
+
+def test_af_stats_family_with_only_route_maps_is_published(bgp_mon):
+    """A family FRR reports no counter for yet still applies a route-map to has
+    something to report, so it gets a row."""
+    payload = json.loads(json.dumps(APPLIED_NEIGH_JSON))
+    payload["default"]["11.0.0.155"]["addressFamilyInfo"]["ipv6Unicast"] = {
+        "peerGroupMember": "PG1",
+        "routeMapForIncomingAdvertisements": "RM_IN"
+    }
+
+    assert scrape(bgp_mon, payload) is True
+    assert bgp_mon.new_af_stats_state[("default", "11.0.0.155", "ipv6_unicast")] == {
+        'import_policy': 'RM_IN'
+    }
+
+
+def test_af_stats_route_map_change_updates_in_place(bgp_mon):
+    """A route-map swapped on one direction and removed from the other is an
+    update of the row that names the departed field, never a removal of the row,
+    which an on-change subscriber would see as the policies going away."""
+    capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, with_route_maps(APPLIED_NEIGH_JSON, "ipv4Unicast", incoming="RM_IN", outgoing="RM_OUT"))
+    bgp_mon.update_af_stats_states()
+
+    captured = capture_applied_ops(bgp_mon)
+    scrape(bgp_mon, with_route_maps(APPLIED_NEIGH_JSON, "ipv4Unicast", incoming="RM_IN2"))
+    bgp_mon.update_af_stats_states()
+    key = "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv4_unicast"
+    assert not row_removed(captured, key)
+    assert written_fields(captured)[key]['import_policy'] == 'RM_IN2'
+    assert removed_fields(captured)[key] == ('export_policy',)
+    assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast" not in written_fields(captured)
