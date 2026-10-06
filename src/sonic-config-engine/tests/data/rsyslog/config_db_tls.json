@@ -9,11 +9,13 @@
         "10.0.0.5": {
             "protocol": "tls",
             "tls_profile_id": "siem-east",
+            "tls_permitted_peers": "syslog-east.example.com",
             "port": "6514"
         },
         "10.0.0.6": {
             "protocol": "tls",
             "tls_profile_id": "siem-west",
+            "tls_permitted_peers": "syslog-west.example.com,*.west.example.com",
             "port": "6514"
         },
         "10.0.0.7": {
@@ -23,6 +25,12 @@
         "10.0.0.8": {
             "protocol": "tls",
             "tls_profile_id": "missing-profile",
+            "tls_permitted_peers": "syslog-missing.example.com",
+            "port": "6514"
+        },
+        "10.0.0.9": {
+            "protocol": "tls",
+            "tls_profile_id": "siem-east",
             "port": "6514"
         }
     }

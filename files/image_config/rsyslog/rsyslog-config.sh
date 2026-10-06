@@ -84,7 +84,7 @@ ssl_profile_ready() {
 # updates STATE_DB SYSLOG_SERVER|<addr> applied_transport_security.
 publish_syslog_tls_apply_state() {
     local apply_ok="$1"
-    local key proto ts profile applied reason proto_lc ts_lc k found
+    local key proto ts profile peers applied reason proto_lc ts_lc k found
 
     mapfile -t cfg_keys < <(sonic-db-cli CONFIG_DB KEYS "SYSLOG_SERVER|*" 2>/dev/null || true)
 
@@ -107,6 +107,7 @@ publish_syslog_tls_apply_state() {
         proto=$(sonic-db-cli CONFIG_DB HGET "$key" protocol 2>/dev/null || true)
         ts=$(sonic-db-cli CONFIG_DB HGET "$key" transport_security 2>/dev/null || true)
         profile=$(sonic-db-cli CONFIG_DB HGET "$key" tls_profile_id 2>/dev/null || true)
+        peers=$(sonic-db-cli CONFIG_DB HGET "$key" tls_permitted_peers 2>/dev/null || true)
         applied="false"
         reason="NONE"
         proto_lc=$(printf '%s' "$proto" | tr '[:upper:]' '[:lower:]')
@@ -115,6 +116,8 @@ publish_syslog_tls_apply_state() {
            [ "$ts_lc" = "enabled" ] || [ "$ts_lc" = "1" ]; then
             if [ -z "$profile" ]; then
                 reason="NO_PROFILE"
+            elif [ -z "$peers" ]; then
+                reason="NO_PERMITTED_PEERS"
             elif ! ssl_profile_ready "$profile"; then
                 reason="NO_CERTIFICATE"
             elif [ "$apply_ok" != "true" ]; then

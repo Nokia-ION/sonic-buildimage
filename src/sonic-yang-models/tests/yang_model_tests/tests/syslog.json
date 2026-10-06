@@ -112,6 +112,21 @@
         "desc": "tls_profile_id must match [A-Za-z0-9._-]+",
         "eStrKey": "Pattern"
     },
+    "SYSLOG_SERVER_TLS_MISSING_PEERS": {
+        "desc": "TLS protocol without tls_permitted_peers must be rejected",
+        "eStr": ["tls_permitted_peers is required when protocol is tls"]
+    },
+    "SYSLOG_SERVER_TRANSPORT_SECURITY_TRUE_MISSING_PEERS": {
+        "desc": "transport_security true without tls_permitted_peers must be rejected",
+        "eStr": ["tls_permitted_peers is required when transport_security is true"]
+    },
+    "SYSLOG_SERVER_TLS_PEERS_LIST_WILDCARD": {
+        "desc": "Comma-separated tls_permitted_peers with a leading wildcard label is accepted"
+    },
+    "SYSLOG_SERVER_TLS_PEERS_INVALID": {
+        "desc": "tls_permitted_peers with spaces or a bare wildcard must be rejected",
+        "eStrKey": "Pattern"
+    },
     "SYSLOG_SERVER_SEVERITY": {
         "desc": "Syslog server valid severity"
     },
