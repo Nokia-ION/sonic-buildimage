@@ -2450,6 +2450,9 @@ assert config == original, 'Rendering mutated the ConfigDB input'
         self.assertIn(west, text)
         self.assertIn('StreamDriver.CertFile="/etc/sonic/ssl-certs/siem-west/cert.pem"', text)
         self.assertIn('StreamDriver="ossl"', text)
+        self.assertIn('StreamDriverAuthMode="x509/name"', text)
+        self.assertIn('StreamDriverPermittedPeers="syslog-east.example.com"', text)
+        self.assertIn('StreamDriverPermittedPeers="syslog-west.example.com,*.west.example.com"', text)
         self.assertIn(udp, text)
         self.assertNotIn('StreamDriver.CertFile="/etc/sonic/ssl-certs/missing-profile/cert.pem"', text)
         # Missing certs must not emit a cleartext omfwd for that server.
@@ -2458,6 +2461,20 @@ assert config == original, 'Rendering mutated the ConfigDB input'
             for line in text.splitlines() if line.startswith('action(')
         ))
         self.assertIn(missing, text)  # comment mentions the skipped server
+
+        # Certs present but no tls_permitted_peers: the server is not
+        # authenticated by name, so it must be skipped, never sent cleartext
+        # or to an unauthenticated peer.
+        self.assertIn('TLS requested for 10.0.0.9', text)
+        self.assertIn('tls_permitted_peers is unset', text)
+        self.assertFalse(any(
+            'Target="10.0.0.9"' in line
+            for line in text.splitlines() if line.startswith('action(')
+        ))
+        # Every TLS action carries a permitted-peers list.
+        for line in text.splitlines():
+            if line.startswith('action(') and 'StreamDriver="ossl"' in line:
+                self.assertIn('StreamDriverPermittedPeers="', line)
 
     def test_rsyslog_conf_tls_without_profiles_skips_all_tls(self):
         conf_template = os.path.join(self.test_dir, '..', '..', '..', 'files', 'image_config', 'rsyslog',
