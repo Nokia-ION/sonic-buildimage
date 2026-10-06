@@ -529,3 +529,30 @@ def test_bgp_confederation_template():
         BGP_GLOBALS={'default': {'local_asn': '65100'}}
     )
     assert 'bgp confederation' not in result
+
+
+route_map_ipv6_prefix_set_data = [
+    CmdMapTestInfo('ROUTE_MAP', 'RM_V6|10', {'route_operation': 'permit'},
+                   [conf_cmd, 'route-map RM_V6 permit 10'], no_del=True, ignore_tail=None),
+    CmdMapTestInfo('ROUTE_MAP', 'RM_V6|10', {'match_ipv6_prefix_set': 'PS6'},
+                   [conf_cmd, 'route-map RM_V6 permit 10', '{}match ipv6 address prefix-list PS6']),
+]
+
+def test_route_map_ipv6_prefix_set():
+    data_set_del_test(route_map_ipv6_prefix_set_data)
+
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_route_map_prefix_set_family_switch(run_cmd):
+    """Moving a statement from an IPv4 to an IPv6 prefix-set in one update
+    removes the old match and adds the new one on the same route-map entry."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['PREFIX_SET']('PREFIX_SET', 'PS4', {'mode': 'IPv4'})
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RM_SW|10', {'route_operation': 'permit', 'match_prefix_set': 'PS4'})
+    run_cmd.reset_mock()
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RM_SW|10', {'route_operation': 'permit', 'match_ipv6_prefix_set': 'PS6'})
+    cmds = [call[0][1][-1] for call in run_cmd.call_args_list]
+    assert cmds == ['no match ip address prefix-list PS4', 'match ipv6 address prefix-list PS6']
