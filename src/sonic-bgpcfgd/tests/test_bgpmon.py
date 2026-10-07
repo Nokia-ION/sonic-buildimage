@@ -830,3 +830,156 @@ def test_af_stats_route_map_change_updates_in_place(bgp_mon):
     assert written_fields(captured)[key]['import_policy'] == 'RM_IN2'
     assert removed_fields(captured)[key] == ('export_policy',)
     assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast" not in written_fields(captured)
+
+
+# 'show bgp peer-group json' as FRR 10.5 prints it: a group with a remote AS and
+# a member, one with two families activated, and one with neither.
+PEER_GROUP_JSON = {
+    "PG1": {
+        "remoteAs": 65300,
+        "type": "external",
+        "addressFamiliesConfigured": [],
+        "members": {"11.0.0.155": {"status": "Established"}}
+    },
+    "PGI": {
+        "remoteAs": 65200,
+        "type": "internal",
+        "addressFamiliesConfigured": ["IPv4 Unicast", "IPv6 Unicast"]
+    },
+    "PGN": {
+        "type": "external",
+        "addressFamiliesConfigured": []
+    }
+}
+
+
+def scrape_peer_groups(bgp_mon, by_vrf):
+    """Run the peer-group scrape with one reply per VRF, recording the calls."""
+    replies = {}
+    for vrf, payload in by_vrf.items():
+        if vrf == "default":
+            replies['show bgp peer-group json'] = payload
+        else:
+            replies['show bgp vrf %s peer-group json' % vrf] = payload
+
+    def _run(cmd):
+        return (0, json.dumps(replies[cmd[-1]]))
+
+    with patch('bgpmon.bgpmon.getstatusoutput_noshell', side_effect=_run) as mocked_cmd:
+        result = bgp_mon.get_all_peer_group_applied_states(list(by_vrf.keys()))
+    return result, [c.args[0][-1] for c in mocked_cmd.call_args_list]
+
+
+def test_peer_group_fields_from_live_shape(bgp_mon):
+    """The remote AS, the type and the activated families are mapped; the
+    members are not, having no OpenConfig leaf under the peer-group."""
+    result, _ = scrape_peer_groups(bgp_mon, {"default": PEER_GROUP_JSON})
+    assert result is True
+    assert bgp_mon.new_peer_group_applied_state == {
+        ("default", "PG1"): {'peer_group_name': 'PG1', 'peer_as': '65300', 'peer_type': 'external'},
+        ("default", "PGI"): {'peer_group_name': 'PGI', 'peer_as': '65200', 'peer_type': 'internal'},
+        ("default", "PGN"): {'peer_group_name': 'PGN'},
+    }
+    assert bgp_mon.new_peer_group_af_applied_state == {
+        ("default", "PGI", "ipv4_unicast"): {'enabled': 'true'},
+        ("default", "PGI", "ipv6_unicast"): {'enabled': 'true'},
+    }
+
+
+def test_peer_group_type_needs_a_remote_as(bgp_mon):
+    """FRR calls a group with no remote AS external; that says nothing about the
+    group, so no type is published without the AS."""
+    scrape_peer_groups(bgp_mon, {"default": {"PGN": PEER_GROUP_JSON["PGN"]}})
+    assert 'peer_type' not in bgp_mon.new_peer_group_applied_state[("default", "PGN")]
+
+
+def test_peer_group_auto_type_is_not_published(bgp_mon):
+    """FRR's auto type has no OpenConfig peer-type to report it as."""
+    scrape_peer_groups(bgp_mon, {"default": {"PGA": {"remoteAs": 65400, "type": "auto"}}})
+    assert bgp_mon.new_peer_group_applied_state[("default", "PGA")] == {
+        'peer_group_name': 'PGA', 'peer_as': '65400'}
+
+
+def test_peer_group_unmapped_family_is_not_published(bgp_mon):
+    """Only the families the model maps get a row."""
+    scrape_peer_groups(bgp_mon, {"default": {"PGV": {
+        "remoteAs": 65400, "type": "external",
+        "addressFamiliesConfigured": ["IPv4 Unicast", "L2VPN EVPN"]}}})
+    assert list(bgp_mon.new_peer_group_af_applied_state) == [("default", "PGV", "ipv4_unicast")]
+
+
+def test_peer_group_vrfs_are_asked_for_by_name(bgp_mon):
+    """The vrf all and vrf default forms answer {}, so the default instance is
+    asked for without a vrf and every other one by name, each keyed apart."""
+    result, cmds = scrape_peer_groups(bgp_mon, {
+        "default": {"PG1": PEER_GROUP_JSON["PG1"]},
+        "Vrf_red": {"PG1": {"remoteAs": 65500, "type": "external"}}})
+    assert result is True
+    assert sorted(cmds) == ['show bgp peer-group json', 'show bgp vrf Vrf_red peer-group json']
+    assert bgp_mon.new_peer_group_applied_state[("Vrf_red", "PG1")]['peer_as'] == '65500'
+    assert bgp_mon.new_peer_group_applied_state[("default", "PG1")]['peer_as'] == '65300'
+
+
+@patch('syslog.syslog')
+def test_peer_group_failed_vrf_fails_the_scrape(mocked_syslog, bgp_mon):
+    """One VRF failing leaves the previous snapshot alone rather than publishing
+    the others as though that VRF had no groups."""
+    scrape_peer_groups(bgp_mon, {"default": PEER_GROUP_JSON})
+    before = dict(bgp_mon.new_peer_group_applied_state)
+    with patch('bgpmon.bgpmon.getstatusoutput_noshell', side_effect=[(0, json.dumps(PEER_GROUP_JSON)), (1, "")]):
+        assert bgp_mon.get_all_peer_group_applied_states(["default", "Vrf_red"]) is False
+    assert bgp_mon.new_peer_group_applied_state == before
+
+
+def test_peer_group_first_pass_writes_rows_and_marker(bgp_mon):
+    captured = capture_applied_ops(bgp_mon)
+    scrape_peer_groups(bgp_mon, {"default": PEER_GROUP_JSON})
+    bgp_mon.update_peer_group_applied_states()
+    keys = written_keys(captured)
+    assert "BGP_PEER_GROUP_APPLIED|default|PG1" in keys
+    assert "BGP_PEER_GROUP_AF_APPLIED|default|PGI|ipv4_unicast" in keys
+    assert keys[-1] == "BGP_PEER_GROUP_APPLIED_META|global"
+
+
+def test_peer_group_unchanged_pass_writes_only_marker(bgp_mon):
+    capture_applied_ops(bgp_mon)
+    scrape_peer_groups(bgp_mon, {"default": PEER_GROUP_JSON})
+    bgp_mon.update_peer_group_applied_states()
+    captured = capture_applied_ops(bgp_mon)
+    scrape_peer_groups(bgp_mon, {"default": PEER_GROUP_JSON})
+    bgp_mon.update_peer_group_applied_states()
+    assert written_keys(captured) == ["BGP_PEER_GROUP_APPLIED_META|global"]
+
+
+def test_peer_group_change_updates_in_place(bgp_mon):
+    """A group losing its remote AS keeps its row and names the fields that
+    went, and a family deactivated loses its own row only."""
+    capture_applied_ops(bgp_mon)
+    scrape_peer_groups(bgp_mon, {"default": PEER_GROUP_JSON})
+    bgp_mon.update_peer_group_applied_states()
+
+    changed = json.loads(json.dumps(PEER_GROUP_JSON))
+    changed["PG1"] = {"type": "external", "addressFamiliesConfigured": []}
+    changed["PGI"]["addressFamiliesConfigured"] = ["IPv4 Unicast"]
+    captured = capture_applied_ops(bgp_mon)
+    scrape_peer_groups(bgp_mon, {"default": changed})
+    bgp_mon.update_peer_group_applied_states()
+
+    key = "BGP_PEER_GROUP_APPLIED|default|PG1"
+    assert not row_removed(captured, key)
+    assert removed_fields(captured)[key] == ('peer_as', 'peer_type')
+    assert row_removed(captured, "BGP_PEER_GROUP_AF_APPLIED|default|PGI|ipv6_unicast")
+    assert "BGP_PEER_GROUP_AF_APPLIED|default|PGI|ipv4_unicast" not in written_keys(captured)
+
+
+def test_peer_group_removed_group_loses_its_rows(bgp_mon):
+    capture_applied_ops(bgp_mon)
+    scrape_peer_groups(bgp_mon, {"default": PEER_GROUP_JSON})
+    bgp_mon.update_peer_group_applied_states()
+    captured = capture_applied_ops(bgp_mon)
+    scrape_peer_groups(bgp_mon, {"default": {"PG1": PEER_GROUP_JSON["PG1"]}})
+    bgp_mon.update_peer_group_applied_states()
+    assert row_removed(captured, "BGP_PEER_GROUP_APPLIED|default|PGI")
+    assert row_removed(captured, "BGP_PEER_GROUP_AF_APPLIED|default|PGI|ipv4_unicast")
+    assert row_removed(captured, "BGP_PEER_GROUP_APPLIED|default|PGN")
+    assert not row_removed(captured, "BGP_PEER_GROUP_APPLIED|default|PG1")
