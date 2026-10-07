@@ -98,6 +98,50 @@ STATIC_ROUTE_META_KEY = "STATIC_ROUTE_APPLIED_META|global"
 GLOBALS_APPLIED_TABLE = "BGP_GLOBALS_APPLIED"
 GLOBALS_APPLIED_META_KEY = "BGP_GLOBALS_APPLIED_META|global"
 
+# Applied peer-groups, keyed <vrf>|<peer-group> as BGP_PEER_GROUP is, with one
+# row per activated address family keyed <vrf>|<peer-group>|<afi-safi> as
+# BGP_PEER_GROUP_AF is. FRR reports peer-groups only through 'show bgp
+# peer-group json', which carries the remote AS, the type and the activated
+# families and nothing else, so that is all these rows hold.
+PEER_GROUP_APPLIED_TABLE = "BGP_PEER_GROUP_APPLIED"
+PEER_GROUP_AF_APPLIED_TABLE = "BGP_PEER_GROUP_AF_APPLIED"
+# Its own marker, for its own vtysh calls.
+PEER_GROUP_APPLIED_META_KEY = "BGP_PEER_GROUP_APPLIED_META|global"
+# The families as FRR prints them in addressFamiliesConfigured, mapped onto the
+# BGP_PEER_GROUP_AF spelling. Only the two families the OpenConfig model maps
+# are published.
+PEER_GROUP_AF_NAMES = {
+    'IPv4 Unicast': 'ipv4_unicast',
+    'IPv6 Unicast': 'ipv6_unicast',
+}
+# FRR's type for a group with a remote AS. "auto" has no OpenConfig peer-type.
+PEER_GROUP_TYPES = ('internal', 'external')
+
+
+def peer_group_applied_fields(name, group):
+    """Map one group of 'show bgp peer-group json' onto its applied row.
+
+    FRR reports the type even for a group with no remote AS, where it is
+    derived from an AS of zero and reads "external" whatever the group will
+    become, so the type is published only beside the AS it describes.
+    """
+    fields = {'peer_group_name': name}
+    remote_as = group.get('remoteAs')
+    if remote_as is not None:
+        fields['peer_as'] = str(remote_as)
+        peer_type = group.get('type')
+        if peer_type in PEER_GROUP_TYPES:
+            fields['peer_type'] = peer_type
+    return fields
+
+
+def peer_group_applied_families(group):
+    """The activated families of one group, in the BGP_PEER_GROUP_AF spelling."""
+    families = group.get('addressFamiliesConfigured')
+    if not isinstance(families, list):
+        return []
+    return sorted(PEER_GROUP_AF_NAMES[f] for f in families if f in PEER_GROUP_AF_NAMES)
+
 
 def parse_route_map_match(clause):
     """One rendered match clause to a (field, value) pair, or None.
@@ -324,6 +368,13 @@ class BgpStateGet:
         self.new_af_stats_state = {}
         self.globals_applied_state = {}
         self.new_globals_applied_state = {}
+        # dic peer_group_applied_state maps (vrf, peer-group) and
+        # peer_group_af_applied_state maps (vrf, peer-group, afi_safi) to the
+        # fields last published, change gated like applied_state
+        self.peer_group_applied_state = {}
+        self.new_peer_group_applied_state = {}
+        self.peer_group_af_applied_state = {}
+        self.new_peer_group_af_applied_state = {}
         self.cached_timestamp = 0
         self.db = swsscommon.SonicV2Connector(use_unix_socket_path=True)
         self.db.connect(self.db.STATE_DB, False)
@@ -340,6 +391,9 @@ class BgpStateGet:
         self.db.delete_all_by_pattern(self.db.STATE_DB, STATIC_ROUTE_META_KEY)
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % GLOBALS_APPLIED_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, GLOBALS_APPLIED_META_KEY)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % PEER_GROUP_APPLIED_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % PEER_GROUP_AF_APPLIED_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, PEER_GROUP_APPLIED_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
     # A quick way to check if there are anything happening within BGP is to
@@ -722,6 +776,70 @@ class BgpStateGet:
         self.globals_applied_state = {vrf: dict(fields)
                                         for vrf, fields in self.new_globals_applied_state.items()}
 
+    # One call per VRF, since 'show bgp vrf all peer-group json' answers {}: the
+    # command looks the instance up by name, and the default instance has none,
+    # so it is asked for without a vrf and every other one by name. The VRFs
+    # are the ones the summary scrape just found; when that scrape failed there
+    # is no list to go by, and the pass is skipped rather than guessed at.
+    def get_all_peer_group_applied_states(self, vrfs):
+        groups = {}
+        for vrf in sorted(vrfs):
+            if vrf == "default":
+                cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp peer-group json']
+            else:
+                cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp vrf %s peer-group json' % vrf]
+            try:
+                rc, output = getstatusoutput_noshell(cmd)
+                if rc:
+                    syslog.syslog(syslog.LOG_WARNING,
+                                  "*WARNING* Failed with rc:{} when execute: {}".format(rc, cmd))
+                    return False
+                if len(output) == 0:
+                    syslog.syslog(syslog.LOG_WARNING, "*WARNING* output none when execute: {}".format(cmd))
+                    return False
+                groups[vrf] = json.loads(output)
+            except Exception as e:
+                syslog.syslog(syslog.LOG_WARNING,
+                              "*WARNING* An unexpected error occurred: {} when execute: {}".format(e, cmd))
+                return False
+
+        self.new_peer_group_applied_state.clear()
+        self.new_peer_group_af_applied_state.clear()
+        for vrf, vrf_groups in groups.items():
+            if not isinstance(vrf_groups, dict):
+                continue
+            for name, group in vrf_groups.items():
+                if not isinstance(group, dict):
+                    continue
+                self.new_peer_group_applied_state[(vrf, name)] = peer_group_applied_fields(name, group)
+                for afi_safi in peer_group_applied_families(group):
+                    self.new_peer_group_af_applied_state[(vrf, name, afi_safi)] = {'enabled': 'true'}
+        return True
+
+    def update_peer_group_applied_states(self):
+        ops = []
+        for current, previous_state, table in (
+                (self.new_peer_group_applied_state, self.peer_group_applied_state, PEER_GROUP_APPLIED_TABLE),
+                (self.new_peer_group_af_applied_state, self.peer_group_af_applied_state, PEER_GROUP_AF_APPLIED_TABLE)):
+            for entry, fields in current.items():
+                previous = previous_state.get(entry)
+                if previous != fields:
+                    ops.append(RowOp("%s|%s" % (table, "|".join(entry)),
+                                     fields, departed_fields(previous, fields)))
+                if len(ops) > PIPE_BATCH_MAX_COUNT:
+                    self.flush_applied_pipe(ops)
+            for entry in previous_state:
+                if entry not in current:
+                    ops.append(RowOp("%s|%s" % (table, "|".join(entry)), None, ()))
+                if len(ops) > PIPE_BATCH_MAX_COUNT:
+                    self.flush_applied_pipe(ops)
+        ops.append(RowOp(PEER_GROUP_APPLIED_META_KEY, {'last_sync': str(int(time.time()))}, ()))
+        self.flush_applied_pipe(ops)
+        self.peer_group_applied_state = {entry: dict(fields)
+                                         for entry, fields in self.new_peer_group_applied_state.items()}
+        self.peer_group_af_applied_state = {entry: dict(fields)
+                                            for entry, fields in self.new_peer_group_af_applied_state.items()}
+
     def get_all_applied_states(self):
         cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp vrf all neighbors json']
         try:
@@ -1039,6 +1157,11 @@ def main():
         # still change gated, so an idle system does not add Redis writes.
         if bgp_state_get.get_all_globals_applied_states():
             bgp_state_get.update_globals_applied_states()
+            # The peer-groups are asked for per VRF, from the list the summary
+            # scrape has just produced, and carry their own marker.
+            vrfs = list(bgp_state_get.new_globals_applied_state.keys())
+            if bgp_state_get.get_all_peer_group_applied_states(vrfs):
+                bgp_state_get.update_peer_group_applied_states()
         if bgp_state_get.get_all_applied_states():
             # Counters go first because the freshness marker both tables share is
             # written at the end of update_applied_states. Writing the marker
