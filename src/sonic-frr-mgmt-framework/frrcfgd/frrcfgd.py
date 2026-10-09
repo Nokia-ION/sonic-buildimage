@@ -833,7 +833,8 @@ class CommandArgument(object):
                        'mp-as-set': ('as-set', 'no-as-set'),
                        'no-prepend': 'no-prepend',
                        'replace-as': 'replace-as',
-                       'blackhole': 'blackhole'
+                       'blackhole': 'blackhole',
+                       'pfx-force': 'force'
         }
         if format == 'no-prefix':
             return 'no ' if not self.enabled else ''
@@ -1920,7 +1921,7 @@ class BGPConfigDaemon:
                       (['send_default_route', '+default_rmap'],             '{no:no-prefix}neighbor {} default-originate {:default-rmap}', ['true', 'false']),
                       ('default_rmap',                                      '{no:no-prefix}neighbor {} default-originate route-map {}'),
                       (['max_prefix_limit', '++max_prefix_warning_threshold',
-                        '+max_prefix_restart_interval&max_prefix_warning_only'], '{no:no-prefix}neighbor {} maximum-prefix {} {} {:restart}'),
+                        '++max_prefix_restart_interval&max_prefix_warning_only', '++max_prefix_force'], '{no:no-prefix}neighbor {} maximum-prefix {} {} {:restart} {:pfx-force}'),
                       ('route_map_in',                                      '{no:no-prefix}neighbor {} route-map {} in'),
                       ('route_map_out',                                     '{no:no-prefix}neighbor {} route-map {} out'),
                       ('soft_reconfiguration_in',                           '{no:no-prefix}neighbor {} soft-reconfiguration inbound', ['true', 'false']),
