@@ -949,6 +949,12 @@ class CommandArgument(object):
                 self.value = 'nexthop-vrf %s' % self.to_str()
         elif format == 'tolower':
             self.tolower = True
+        elif format == 'ip-nh':
+            # OpenConfig's SELF next-hop is stored as 'self'. FRR spells it
+            # peer-address, which an outbound route-map resolves to the local
+            # address of each session it is applied to.
+            if self.to_str().strip().lower() == 'self':
+                self.value = 'peer-address'
         elif format == 'pim_hello_parms':
             self.value = ' '.join(self.value.split(','))
         return self.to_str()
@@ -1958,7 +1964,7 @@ class BGPConfigDaemon:
                          ('call_route_map',                 '{no:no-prefix}call {:enable-only}'),
                          ('set_origin',                     '[bgpd]{no:no-prefix}set origin {:tolower}'),
                          ('set_local_pref',                 '[bgpd]{no:no-prefix}set local-preference {}'),
-                         ('set_next_hop',                   '{no:no-prefix}set ip next-hop {}'),
+                         ('set_next_hop',                   '{no:no-prefix}set ip next-hop {:ip-nh}'),
                          ('set_ipv6_next_hop_global',       '[bgpd]{no:no-prefix}set ipv6 next-hop global {}'),
                          ('set_ipv6_next_hop_prefer_global', '[bgpd]{no:no-prefix}set ipv6 next-hop prefer-global', ['true', 'false']),
                          (['set_metric_action', '+set_metric', '+set_med'], '{}set metric {} ', handle_rmap_set_metric),
