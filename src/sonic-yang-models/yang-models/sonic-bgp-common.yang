@@ -387,6 +387,11 @@ module sonic-bgp-common {
             description "Time in seconds to wait before re-establishing the session after a max-prefix limit shutdown.";
         }
 
+        leaf max_prefix_force {
+            type boolean;
+            description "Count every prefix received from this neighbor against the maximum prefix limit, not only the ones accepted by inbound policy.";
+        }
+
         leaf-list route_map_in {
             type leafref {
                 path "/rmap:sonic-route-map/rmap:ROUTE_MAP_SET/rmap:ROUTE_MAP_SET_LIST/rmap:name";
