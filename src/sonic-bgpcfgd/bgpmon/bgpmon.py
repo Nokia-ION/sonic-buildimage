@@ -180,7 +180,15 @@ def parse_route_map_set(clause):
     if parts[0] == "local-preference" and len(parts) == 2:
         return {"set_local_pref": parts[1]}
     if parts[0] == "ip" and len(parts) == 3 and parts[1] == "next-hop":
+        # CONFIG_DB spells the self next-hop 'self', which frrcfgd renders as
+        # FRR's peer-address.
+        if parts[2] == "peer-address":
+            return {"set_next_hop": "self"}
         return {"set_next_hop": parts[2]}
+    if parts[0] == "ipv6" and len(parts) == 4 and parts[1] == "next-hop" and parts[2] == "global":
+        return {"set_ipv6_next_hop_global": parts[3]}
+    if parts[0] == "ipv6" and len(parts) == 3 and parts[1] == "next-hop" and parts[2] == "prefer-global":
+        return {"set_ipv6_next_hop_prefer_global": "true"}
     if parts[0] == "metric" and len(parts) == 2:
         v = parts[1]
         if v.startswith("+"):

@@ -983,3 +983,17 @@ def test_peer_group_removed_group_loses_its_rows(bgp_mon):
     assert row_removed(captured, "BGP_PEER_GROUP_AF_APPLIED|default|PGI|ipv4_unicast")
     assert row_removed(captured, "BGP_PEER_GROUP_APPLIED|default|PGN")
     assert not row_removed(captured, "BGP_PEER_GROUP_APPLIED|default|PG1")
+
+
+# The next-hop set clauses as FRR renders them in 'show route-map json', and
+# the CONFIG_DB fields they come from.
+@pytest.mark.parametrize("clause,fields", [
+    ("ip next-hop 10.10.10.1", {"set_next_hop": "10.10.10.1"}),
+    # frrcfgd renders CONFIG_DB's 'self' as peer-address, so it is reported
+    # back in the CONFIG_DB spelling.
+    ("ip next-hop peer-address", {"set_next_hop": "self"}),
+    ("ipv6 next-hop global 2001:db8::1", {"set_ipv6_next_hop_global": "2001:db8::1"}),
+    ("ipv6 next-hop prefer-global", {"set_ipv6_next_hop_prefer_global": "true"}),
+])
+def test_route_map_next_hop_set_clauses(clause, fields):
+    assert bgpmon.bgpmon.parse_route_map_set(clause) == fields
