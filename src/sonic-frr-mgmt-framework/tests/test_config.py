@@ -542,6 +542,29 @@ def test_route_map_ipv6_prefix_set():
     data_set_del_test(route_map_ipv6_prefix_set_data)
 
 
+# OpenConfig's SELF next-hop is stored as 'self' and rendered in FRR's
+# spelling; an address is passed through as it is.
+route_map_set_next_hop_self_data = [
+    CmdMapTestInfo('ROUTE_MAP', 'RM_NHS|10', {'route_operation': 'permit'},
+                   [conf_cmd, 'route-map RM_NHS permit 10'], no_del=True, ignore_tail=None),
+    CmdMapTestInfo('ROUTE_MAP', 'RM_NHS|10', {'set_next_hop': 'self'},
+                   [conf_cmd, 'route-map RM_NHS permit 10', '{}set ip next-hop peer-address']),
+]
+
+route_map_set_next_hop_ip_data = [
+    CmdMapTestInfo('ROUTE_MAP', 'RM_NHA|10', {'route_operation': 'permit'},
+                   [conf_cmd, 'route-map RM_NHA permit 10'], no_del=True, ignore_tail=None),
+    CmdMapTestInfo('ROUTE_MAP', 'RM_NHA|10', {'set_next_hop': '10.10.10.1'},
+                   [conf_cmd, 'route-map RM_NHA permit 10', '{}set ip next-hop 10.10.10.1']),
+]
+
+def test_route_map_set_next_hop_self():
+    data_set_del_test(route_map_set_next_hop_self_data)
+
+def test_route_map_set_next_hop_ip():
+    data_set_del_test(route_map_set_next_hop_ip_data)
+
+
 @patch.dict('sys.modules', **mockmapping)
 @patch('frrcfgd.frrcfgd.g_run_command')
 def test_route_map_prefix_set_family_switch(run_cmd):
