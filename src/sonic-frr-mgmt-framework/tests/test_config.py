@@ -579,3 +579,68 @@ def test_route_map_prefix_set_family_switch(run_cmd):
     hdlr['ROUTE_MAP']('ROUTE_MAP', 'RM_SW|10', {'route_operation': 'permit', 'match_ipv6_prefix_set': 'PS6'})
     cmds = [call[0][1][-1] for call in run_cmd.call_args_list]
     assert cmds == ['no match ip address prefix-list PS4', 'match ipv6 address prefix-list PS6']
+
+
+def maximum_prefix_cmds(run_cmd):
+    """The maximum-prefix commands issued, with the spaces optional arguments
+    leave collapsed."""
+    cmds = []
+    for call in run_cmd.call_args_list:
+        last = ' '.join(call[0][1][-1].split())
+        if 'maximum-prefix' in last:
+            cmds.append(last)
+    return cmds
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_neighbor_maximum_prefix_force(run_cmd):
+    """max_prefix_force counts every received prefix against the limit, which
+    FRR spells as a trailing force; dropping it reissues the limit without."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+    key = 'default|10.0.0.1|ipv4_unicast'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'max_prefix_limit': '100'})
+    assert maximum_prefix_cmds(run_cmd) == ['neighbor 10.0.0.1 maximum-prefix 100']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'max_prefix_limit': '100', 'max_prefix_force': 'true'})
+    assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor 10.0.0.1 maximum-prefix 100 force'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'max_prefix_limit': '100', 'max_prefix_warning_threshold': '80',
+                                                     'max_prefix_warning_only': 'true', 'max_prefix_force': 'true'})
+    assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor 10.0.0.1 maximum-prefix 100 80 warning-only force'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'max_prefix_limit': '100'})
+    assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor 10.0.0.1 maximum-prefix 100'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'max_prefix_limit': '100', 'max_prefix_restart_interval': '30'})
+    assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor 10.0.0.1 maximum-prefix 100 restart 30'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'max_prefix_limit': '100', 'max_prefix_restart_interval': '30',
+                                                     'max_prefix_force': 'true'})
+    assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor 10.0.0.1 maximum-prefix 100 restart 30 force'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'max_prefix_limit': '100'})
+    assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor 10.0.0.1 maximum-prefix 100'
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_peer_group_maximum_prefix_force(run_cmd):
+    """The peer-group address family shares the mapping."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+    run_cmd.reset_mock()
+    hdlr['BGP_PEER_GROUP_AF']('BGP_PEER_GROUP_AF', 'default|PG1|ipv6_unicast',
+                              {'max_prefix_limit': '50', 'max_prefix_force': 'true'})
+    assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor PG1 maximum-prefix 50 force'
