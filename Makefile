@@ -1,7 +1,7 @@
 # SONiC make file
 
 NOBULLSEYE ?= 1
-NOBOOKWORM ?= 0
+NOBOOKWORM ?= 1
 NOTRIXIE ?= 0
 
 override Q := @
