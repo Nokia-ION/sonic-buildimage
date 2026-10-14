@@ -70,7 +70,7 @@ dependent_startup_wait_for=zsocket:exited
 
 {% if DEVICE_METADATA is defined and DEVICE_METADATA.localhost.frr_mgmt_framework_config is defined and DEVICE_METADATA.localhost.frr_mgmt_framework_config == "true" %}
 [program:vrrpd]
-command=/usr/lib/frr/vrrpd -A 127.0.0.1
+command=/usr/lib/frr/vrrpd -P 0
 priority={{ _pbase + 1 }}
 autostart=false
 autorestart=false
