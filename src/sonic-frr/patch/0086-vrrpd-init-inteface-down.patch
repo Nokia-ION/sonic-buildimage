@@ -1,4 +1,4 @@
-From cf4f61f7759f2259f0767fbcf27b80f67b43a2d5 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: srinj <sriniketh.j@nokia.com>
 Date: Sun, 30 Aug 2026 12:16:55 +0530
 Subject: [PATCH] fix: vrrpd move to init on interface shutdown
@@ -8,10 +8,10 @@ Subject: [PATCH] fix: vrrpd move to init on interface shutdown
  1 file changed, 12 insertions(+), 1 deletion(-)
 
 diff --git a/vrrpd/vrrp.c b/vrrpd/vrrp.c
-index 29cb331518..3554671580 100644
+index 474a3bac24..cda3d1a065 100644
 --- a/vrrpd/vrrp.c
 +++ b/vrrpd/vrrp.c
-@@ -2435,9 +2435,20 @@ void vrrp_if_down(struct interface *ifp)
+@@ -2442,9 +2442,20 @@ void vrrp_if_down(struct interface *ifp)
  	vrs = vrrp_lookup_by_if_any(ifp);
  
  	for (ALL_LIST_ELEMENTS_RO(vrs, ln, vr)) {
@@ -33,6 +33,3 @@ index 29cb331518..3554671580 100644
  			DEBUGD(&vrrp_dbg_auto,
  			       VRRP_LOGPFX VRRP_LOGPFX_VRID "Interface %s down",
  			       vr->vrid, ifp->name);
--- 
-2.43.0
-
