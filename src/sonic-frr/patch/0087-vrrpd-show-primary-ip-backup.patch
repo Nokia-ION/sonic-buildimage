@@ -1,4 +1,4 @@
-From 56fee0c8ad2e3c8f6b094f8b4449e2b4a060149f Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: srinj <sriniketh.j@nokia.com>
 Date: Wed, 2 Sep 2026 12:40:11 +0530
 Subject: [PATCH] show primary ip in backup state
@@ -8,10 +8,10 @@ Subject: [PATCH] show primary ip in backup state
  1 file changed, 1 deletion(-)
 
 diff --git a/vrrpd/vrrp.c b/vrrpd/vrrp.c
-index 3554671580..0c10e465d6 100644
+index cda3d1a065..b35dfed9b7 100644
 --- a/vrrpd/vrrp.c
 +++ b/vrrpd/vrrp.c
-@@ -1649,7 +1649,6 @@ static void vrrp_change_state_backup(struct vrrp_router *r)
+@@ -1656,7 +1656,6 @@ static void vrrp_change_state_backup(struct vrrp_router *r)
  	r->advert_pending = false;
  	r->garp_pending = false;
  	r->ndisc_pending = false;
@@ -19,6 +19,3 @@ index 3554671580..0c10e465d6 100644
  
  	vrrp_zclient_send_interface_protodown(r->mvl_ifp, true);
  }
--- 
-2.43.0
-

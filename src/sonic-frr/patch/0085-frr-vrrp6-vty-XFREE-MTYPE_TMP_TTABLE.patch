@@ -1,4 +1,4 @@
-From 32d9d03b095da347f91f34f8f9d419c695e44c8e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: brajarat <balachandar.rajarathinam@nokia.com>
 Date: Tue, 25 Aug 2026 10:50:00 +0530
 Subject: [PATCH] vrrpd: free ttable_dump buffer with correct memtype
@@ -29,6 +29,3 @@ index 2511876c22..63a354cdb3 100644
  	ttable_del(tt);
  
  	list_delete(&ll);
--- 
-2.34.1
-

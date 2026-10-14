@@ -1,4 +1,4 @@
-From 6e57d4c54177292a7922049e10e476c6248df382 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: srinj <sriniketh.j@nokia.com>
 Date: Thu, 10 Sep 2026 16:20:16 +0530
 Subject: [PATCH] fix: vrrp v6 display lla backup
@@ -73,6 +73,3 @@ index 63a354cdb3..178333d709 100644
  	ttable_add_row(tt, "%s|%s", "Primary IP (v6)", sipstr6);
  	ttable_add_row(tt, "%s|%s", "Virtual MAC (v6)", ethstr6);
  	ttable_add_row(tt, "%s|%s", "Status (v6)", stastr6);
--- 
-2.43.0
-
