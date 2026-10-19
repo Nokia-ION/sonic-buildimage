@@ -1,3 +1,4 @@
+import json
 import socket
 import pytest
 from unittest.mock import MagicMock, NonCallableMagicMock, patch
@@ -18,6 +19,55 @@ with patch.dict('sys.modules', **mockmapping):
     from frrcfgd.frrcfgd import AggregateAddr
     from frrcfgd.frrcfgd import IpNextHop
     from frrcfgd.frrcfgd import IpNextHopSet
+    from frrcfgd.frrcfgd import VrrpStateSync
+
+def test_vrrp_state_sync_parse_counters():
+    reply = json.dumps([{
+        'interface': 'Vlan100',
+        'vrid': 25,
+        'v4': {
+            'effectivePriority': 100,
+            'status': 'Master',
+            'stats': {
+                'adverTx': 171,
+                'adverRx': 0,
+                'garpTx': 1,
+                'transitions': 2,
+            },
+        },
+        'v6': {
+            'effectivePriority': 90,
+            'status': 'Backup',
+            'stats': {
+                'adverTx': 1806,
+                'adverRx': 1,
+                'neighborAdverTx': 1,
+                'transitions': 2,
+            },
+        },
+    }])
+
+    parse = VrrpStateSync._VrrpStateSync__parse_reply
+    assert parse(reply, 'v4') == {
+        'Vlan100|25': {
+            'effective_priority': '100',
+            'state': 'Master',
+            'advertisements_tx': '171',
+            'advertisements_rx': '0',
+            'gratuitous_arp_tx': '1',
+            'state_transitions': '2',
+        },
+    }
+    assert parse(reply, 'v6') == {
+        'Vlan100|25': {
+            'effective_priority': '90',
+            'state': 'Backup',
+            'advertisements_tx': '1806',
+            'advertisements_rx': '1',
+            'neighbor_advertisements_tx': '1',
+            'state_transitions': '2',
+        },
+    }
 
 def test_data_with_op():
     data = CachedDataWithOp()
