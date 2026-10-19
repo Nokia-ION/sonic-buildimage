@@ -4435,7 +4435,17 @@ class VrrpVtyClient:
 class VrrpStateSync(threading.Thread):
     AF_SOURCES = [('vrrp', 'show vrrp json', 'v4', 'VRRP_STATE_TABLE'),
                   ('vrrp6', 'show vrrp6 json', 'v6', 'VRRP6_STATE_TABLE')]
-    POLL_INTERVAL_SEC = 2
+    COUNTER_FIELDS_BY_AF = {
+        'v4': (('adverTx', 'advertisements_tx'),
+               ('adverRx', 'advertisements_rx'),
+               ('garpTx', 'gratuitous_arp_tx'),
+               ('transitions', 'state_transitions')),
+        'v6': (('adverTx', 'advertisements_tx'),
+               ('adverRx', 'advertisements_rx'),
+               ('neighborAdverTx', 'neighbor_advertisements_tx'),
+               ('transitions', 'state_transitions')),
+    }
+    POLL_INTERVAL_SEC = 4
 
     def __init__(self):
         super(VrrpStateSync, self).__init__(name='VRRP state sync')
@@ -4468,7 +4478,28 @@ class VrrpStateSync(threading.Thread):
             state = af_data.get('status')
             if ifname is None or vrid is None or priority is None or state is None:
                 continue
-            rows['{}|{}'.format(ifname, vrid)] = (int(priority), str(state))
+
+            fields = {
+                'effective_priority': str(int(priority)),
+                'state': str(state),
+            }
+            stats = af_data.get('stats')
+            if not isinstance(stats, dict):
+                stats = {}
+            for json_name, db_name in VrrpStateSync.COUNTER_FIELDS_BY_AF[af_key]:
+                value = stats.get(json_name)
+                if value is None:
+                    fields[db_name] = ''
+                    continue
+                try:
+                    fields[db_name] = str(int(value))
+                except (TypeError, ValueError):
+                    fields[db_name] = ''
+                    syslog.syslog(
+                        syslog.LOG_WARNING,
+                        '[vrrp state] invalid counter %s=%r for %s|%s'
+                        % (json_name, value, ifname, vrid))
+            rows['{}|{}'.format(ifname, vrid)] = fields
         return rows
 
     def __publish(self, af, rows):
@@ -4478,13 +4509,17 @@ class VrrpStateSync(threading.Thread):
             prev = {key: None for key in table.getKeys()}
         now = str(int(time.time()))
         published = {}
-        for key, (priority, state) in rows.items():
-            fields = {'effective_priority': str(priority), 'state': state}
+        for key, row in rows.items():
+            fields = dict(row)
             old = prev.get(key)
+            state_changed = old is None or any(
+                old.get(field) != fields[field]
+                for field in ('effective_priority', 'state'))
+            fields['last_changed'] = (
+                now if state_changed else old.get('last_changed', now))
             if old is not None and all(old.get(f) == v for f, v in fields.items()):
                 published[key] = old
                 continue
-            fields['last_changed'] = now
             table.set(key, list(fields.items()))
             published[key] = fields
         for key in prev:
