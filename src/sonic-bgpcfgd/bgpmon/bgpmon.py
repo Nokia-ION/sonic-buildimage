@@ -107,6 +107,18 @@ PEER_GROUP_APPLIED_TABLE = "BGP_PEER_GROUP_APPLIED"
 PEER_GROUP_AF_APPLIED_TABLE = "BGP_PEER_GROUP_AF_APPLIED"
 # Its own marker, for its own vtysh calls.
 PEER_GROUP_APPLIED_META_KEY = "BGP_PEER_GROUP_APPLIED_META|global"
+
+# Applied aggregate addresses, keyed <vrf>|<afi-safi>|<prefix> and with the
+# field names of BGP_GLOBALS_AF_AGGREGATE_ADDR. FRR reports aggregates only in
+# its configuration, so they are read from the bgpd running configuration.
+AGGREGATE_APPLIED_TABLE = "BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED"
+AGGREGATE_APPLIED_META_KEY = "BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED_META|global"
+# The address-family stanzas an aggregate can sit in, mapped onto the
+# BGP_GLOBALS_AF_AGGREGATE_ADDR spelling.
+AGGREGATE_AF_NAMES = {
+    'ipv4 unicast': 'ipv4_unicast',
+    'ipv6 unicast': 'ipv6_unicast',
+}
 # The families as FRR prints them in addressFamiliesConfigured, mapped onto the
 # BGP_PEER_GROUP_AF spelling. Only the two families the OpenConfig model maps
 # are published.
@@ -322,6 +334,43 @@ CAP_PER_FAMILY_IDENTITIES = (
 )
 
 
+def parse_aggregate_addresses(config):
+    """The aggregate addresses of a bgpd running configuration, keyed
+    (vrf, afi_safi, prefix).
+
+    FRR writes each one as "  aggregate-address <prefix>" followed by its
+    options, inside the address-family stanza of the router it belongs to.
+    as_set and summary_only are always published, so that an aggregate with
+    no option still has a field to hold its row.
+    """
+    aggregates = {}
+    vrf = None
+    afi_safi = None
+    for line in config.splitlines():
+        words = line.split()
+        if not words:
+            continue
+        if words[0] == 'router' and len(words) >= 3 and words[1] == 'bgp':
+            vrf = words[4] if len(words) >= 5 and words[3] == 'vrf' else 'default'
+            afi_safi = None
+        elif words[0] == 'address-family':
+            afi_safi = AGGREGATE_AF_NAMES.get(' '.join(words[1:3]))
+        elif words[0] == 'exit-address-family':
+            afi_safi = None
+        elif line.startswith('exit'):
+            vrf = None
+            afi_safi = None
+        elif words[0] == 'aggregate-address' and len(words) >= 2 and vrf and afi_safi:
+            fields = {
+                'as_set': 'true' if 'as-set' in words[2:] else 'false',
+                'summary_only': 'true' if 'summary-only' in words[2:] else 'false',
+            }
+            if 'route-map' in words[2:-1]:
+                fields['policy'] = words[words.index('route-map', 2) + 1]
+            aggregates[(vrf, afi_safi, words[1])] = fields
+    return aggregates
+
+
 def negotiated_capabilities(caps):
     """The capability identities this session negotiated, sorted so that the
     field is stable to compare between scrapes."""
@@ -383,6 +432,10 @@ class BgpStateGet:
         self.new_peer_group_applied_state = {}
         self.peer_group_af_applied_state = {}
         self.new_peer_group_af_applied_state = {}
+        # dic aggregate_applied_state maps (vrf, afi_safi, prefix) to the fields
+        # last published, change gated like applied_state
+        self.aggregate_applied_state = {}
+        self.new_aggregate_applied_state = {}
         self.cached_timestamp = 0
         self.db = swsscommon.SonicV2Connector(use_unix_socket_path=True)
         self.db.connect(self.db.STATE_DB, False)
@@ -402,6 +455,8 @@ class BgpStateGet:
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % PEER_GROUP_APPLIED_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % PEER_GROUP_AF_APPLIED_TABLE)
         self.db.delete_all_by_pattern(self.db.STATE_DB, PEER_GROUP_APPLIED_META_KEY)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, "%s|*" % AGGREGATE_APPLIED_TABLE)
+        self.db.delete_all_by_pattern(self.db.STATE_DB, AGGREGATE_APPLIED_META_KEY)
         self.MAX_RETRY_ATTEMPTS = 3
 
     # A quick way to check if there are anything happening within BGP is to
@@ -1142,6 +1197,46 @@ class BgpStateGet:
         self.static_route_state = {entry: dict(fields)
                                    for entry, fields in self.new_static_route_state.items()}
 
+    # One call covers every VRF, since the running configuration holds each
+    # router stanza. A failed call leaves the previous snapshot alone rather than
+    # publishing it as "FRR holds no aggregates".
+    def get_all_aggregate_applied_states(self):
+        cmd = ["vtysh", "-H", "/dev/null", "-c", 'show running-config bgpd']
+        try:
+            rc, output = getstatusoutput_noshell(cmd)
+            if rc:
+                syslog.syslog(syslog.LOG_WARNING,
+                              "*WARNING* Failed with rc:{} when execute: {}".format(rc, cmd))
+                return False
+            if len(output) == 0:
+                syslog.syslog(syslog.LOG_WARNING, "*WARNING* output none when execute: {}".format(cmd))
+                return False
+        except Exception as e:
+            syslog.syslog(syslog.LOG_WARNING,
+                          "*WARNING* An unexpected error occurred: {} when execute: {}".format(e, cmd))
+            return False
+        self.new_aggregate_applied_state = parse_aggregate_addresses(output)
+        return True
+
+    def update_aggregate_applied_states(self):
+        ops = []
+        for entry, fields in self.new_aggregate_applied_state.items():
+            previous = self.aggregate_applied_state.get(entry)
+            if previous != fields:
+                ops.append(RowOp("%s|%s" % (AGGREGATE_APPLIED_TABLE, "|".join(entry)),
+                                 fields, departed_fields(previous, fields)))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        for entry in self.aggregate_applied_state:
+            if entry not in self.new_aggregate_applied_state:
+                ops.append(RowOp("%s|%s" % (AGGREGATE_APPLIED_TABLE, "|".join(entry)), None, ()))
+            if len(ops) > PIPE_BATCH_MAX_COUNT:
+                self.flush_applied_pipe(ops)
+        ops.append(RowOp(AGGREGATE_APPLIED_META_KEY, {'last_sync': str(int(time.time()))}, ()))
+        self.flush_applied_pipe(ops)
+        self.aggregate_applied_state = {entry: dict(fields)
+                                        for entry, fields in self.new_aggregate_applied_state.items()}
+
 
 def main():
 
@@ -1187,6 +1282,9 @@ def main():
         # failure here leaves the other tables alone.
         if bgp_state_get.get_all_static_route_states():
             bgp_state_get.update_static_route_states()
+        # Aggregates likewise, from the running configuration.
+        if bgp_state_get.get_all_aggregate_applied_states():
+            bgp_state_get.update_aggregate_applied_states()
 
 if __name__ == '__main__':
     main()

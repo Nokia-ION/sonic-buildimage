@@ -997,3 +997,107 @@ def test_peer_group_removed_group_loses_its_rows(bgp_mon):
 ])
 def test_route_map_next_hop_set_clauses(clause, fields):
     assert bgpmon.bgpmon.parse_route_map_set(clause) == fields
+
+
+# A bgpd running configuration in the shape FRR writes it, with an aggregate
+# in each family of the default instance and one in a named VRF.
+AGGREGATE_CONFIG = """Building configuration...
+
+Current configuration:
+!
+frr version 10.5.4
+frr defaults traditional
+!
+router bgp 65200
+ bgp router-id 11.0.0.64
+ neighbor 11.0.0.155 remote-as 65300
+ !
+ address-family ipv4 unicast
+  aggregate-address 10.10.0.0/16
+  aggregate-address 10.20.0.0/16 as-set summary-only route-map AGG-V4
+  neighbor 11.0.0.155 activate
+ exit-address-family
+ !
+ address-family ipv6 unicast
+  aggregate-address 2001:db8::/32 summary-only route-map AGG-V6 origin igp
+ exit-address-family
+exit
+!
+router bgp 65200 vrf Vrf_red
+ !
+ address-family ipv4 unicast
+  aggregate-address 10.30.0.0/16 route-map AGG-RED
+ exit-address-family
+exit
+!
+end
+"""
+
+
+def scrape_aggregates(bgp_mon, config):
+    with patch('bgpmon.bgpmon.getstatusoutput_noshell', return_value=(0, config)) as mocked_cmd:
+        result = bgp_mon.get_all_aggregate_applied_states()
+    return result, [c.args[0][-1] for c in mocked_cmd.call_args_list]
+
+
+def test_aggregate_fields_from_running_config(bgp_mon):
+    result, cmds = scrape_aggregates(bgp_mon, AGGREGATE_CONFIG)
+    assert result is True
+    assert cmds == ['show running-config bgpd']
+    assert bgp_mon.new_aggregate_applied_state == {
+        ("default", "ipv4_unicast", "10.10.0.0/16"): {'as_set': 'false', 'summary_only': 'false'},
+        ("default", "ipv4_unicast", "10.20.0.0/16"): {'as_set': 'true', 'summary_only': 'true', 'policy': 'AGG-V4'},
+        ("default", "ipv6_unicast", "2001:db8::/32"): {'as_set': 'false', 'summary_only': 'true', 'policy': 'AGG-V6'},
+        ("Vrf_red", "ipv4_unicast", "10.30.0.0/16"): {'as_set': 'false', 'summary_only': 'false', 'policy': 'AGG-RED'},
+    }
+
+
+def test_aggregate_outside_a_mapped_family_is_ignored(bgp_mon):
+    config = "router bgp 65200\n address-family l2vpn evpn\n  aggregate-address 10.1.0.0/16\n exit-address-family\nexit\n"
+    scrape_aggregates(bgp_mon, config)
+    assert bgp_mon.new_aggregate_applied_state == {}
+
+
+@patch('syslog.syslog')
+def test_aggregate_failed_scrape_preserves_previous_snapshot(mocked_syslog, bgp_mon):
+    scrape_aggregates(bgp_mon, AGGREGATE_CONFIG)
+    before = dict(bgp_mon.new_aggregate_applied_state)
+    with patch('bgpmon.bgpmon.getstatusoutput_noshell', return_value=(1, "")):
+        assert bgp_mon.get_all_aggregate_applied_states() is False
+    assert bgp_mon.new_aggregate_applied_state == before
+
+
+def test_aggregate_first_pass_writes_rows_and_marker(bgp_mon):
+    captured = capture_applied_ops(bgp_mon)
+    scrape_aggregates(bgp_mon, AGGREGATE_CONFIG)
+    bgp_mon.update_aggregate_applied_states()
+    keys = written_keys(captured)
+    assert "BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED|default|ipv4_unicast|10.10.0.0/16" in keys
+    assert "BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED|Vrf_red|ipv4_unicast|10.30.0.0/16" in keys
+    assert keys[-1] == "BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED_META|global"
+
+
+def test_aggregate_unchanged_pass_writes_only_marker(bgp_mon):
+    capture_applied_ops(bgp_mon)
+    scrape_aggregates(bgp_mon, AGGREGATE_CONFIG)
+    bgp_mon.update_aggregate_applied_states()
+    captured = capture_applied_ops(bgp_mon)
+    scrape_aggregates(bgp_mon, AGGREGATE_CONFIG)
+    bgp_mon.update_aggregate_applied_states()
+    assert written_keys(captured) == ["BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED_META|global"]
+
+
+def test_aggregate_policy_removed_updates_in_place_and_removed_aggregate_goes(bgp_mon):
+    capture_applied_ops(bgp_mon)
+    scrape_aggregates(bgp_mon, AGGREGATE_CONFIG)
+    bgp_mon.update_aggregate_applied_states()
+
+    changed = AGGREGATE_CONFIG.replace(" route-map AGG-V4", "").replace("  aggregate-address 10.10.0.0/16\n", "")
+    captured = capture_applied_ops(bgp_mon)
+    scrape_aggregates(bgp_mon, changed)
+    bgp_mon.update_aggregate_applied_states()
+
+    key = "BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED|default|ipv4_unicast|10.20.0.0/16"
+    assert not row_removed(captured, key)
+    assert removed_fields(captured)[key] == ('policy',)
+    assert row_removed(captured, "BGP_GLOBALS_AF_AGGREGATE_ADDR_APPLIED|default|ipv4_unicast|10.10.0.0/16")
