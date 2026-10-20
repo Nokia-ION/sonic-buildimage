@@ -644,3 +644,51 @@ def test_peer_group_maximum_prefix_force(run_cmd):
     hdlr['BGP_PEER_GROUP_AF']('BGP_PEER_GROUP_AF', 'default|PG1|ipv6_unicast',
                               {'max_prefix_limit': '50', 'max_prefix_force': 'true'})
     assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor PG1 maximum-prefix 50 force'
+
+def aggregate_cmds(run_cmd):
+    """The aggregate-address commands issued, with the spaces optional arguments
+    leave collapsed."""
+    cmds = []
+    for call in run_cmd.call_args_list:
+        last = ' '.join(call[0][1][-1].split())
+        if 'aggregate-address' in last:
+            cmds.append(last)
+    return cmds
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_aggregate_address_route_map(run_cmd):
+    """An aggregate is rendered in its family, and a change or removal of its
+    route-map withdraws the aggregate and announces it again with the rest of
+    its options."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+    tbl = 'BGP_GLOBALS_AF_AGGREGATE_ADDR'
+
+    run_cmd.reset_mock()
+    hdlr[tbl](tbl, 'default|ipv4_unicast|10.10.0.0/16', {'NULL': 'NULL'})
+    assert aggregate_cmds(run_cmd) == ['aggregate-address 10.10.0.0/16']
+    assert run_cmd.call_args_list[-1][0][1][-3] == 'address-family ipv4 unicast'
+
+    run_cmd.reset_mock()
+    hdlr[tbl](tbl, 'default|ipv4_unicast|10.10.0.0/16', {'policy': 'AGG-V4'})
+    assert aggregate_cmds(run_cmd)[-1] == 'aggregate-address 10.10.0.0/16 route-map AGG-V4'
+
+    run_cmd.reset_mock()
+    hdlr[tbl](tbl, 'default|ipv4_unicast|10.10.0.0/16', {'policy': 'AGG-V4B'})
+    assert aggregate_cmds(run_cmd)[-1] == 'aggregate-address 10.10.0.0/16 route-map AGG-V4B'
+
+    run_cmd.reset_mock()
+    hdlr[tbl](tbl, 'default|ipv4_unicast|10.10.0.0/16', {'NULL': 'NULL'})
+    assert aggregate_cmds(run_cmd)[-1] == 'aggregate-address 10.10.0.0/16'
+
+    run_cmd.reset_mock()
+    hdlr[tbl](tbl, 'default|ipv6_unicast|2001:db8::/32', {'policy': 'AGG-V6'})
+    assert aggregate_cmds(run_cmd)[-1] == 'aggregate-address 2001:db8::/32 route-map AGG-V6'
+    assert run_cmd.call_args_list[-1][0][1][-3] == 'address-family ipv6 unicast'
+
+    run_cmd.reset_mock()
+    hdlr[tbl](tbl, 'default|ipv6_unicast|2001:db8::/32', None)
+    assert aggregate_cmds(run_cmd)[-1].startswith('no aggregate-address 2001:db8::/32')
