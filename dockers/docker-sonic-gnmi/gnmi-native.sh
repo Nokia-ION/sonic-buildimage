@@ -143,10 +143,14 @@ else
     TELEMETRY_ARGS+=" -v=2"
 fi
 
+# gRPC defaults to a 4 MiB message limit. gNSI Certz.Rotate with a 20000-CA
+# trust bundle is ~52 MB, and SmartSwitch ZMQ traffic needs at least 32 MiB.
+TELEMETRY_ARGS+=" -max_recv_msg_size=$((64*1024*1024)) -max_send_msg_size=$((64*1024*1024))"
+
 # Enable ZMQ for SmartSwitch
 LOCALHOST_SUBTYPE=`sonic-db-cli CONFIG_DB hget "DEVICE_METADATA|localhost" "subtype"`
 if [[ x"${LOCALHOST_SUBTYPE}" == x"SmartSwitch" ]]; then
-    TELEMETRY_ARGS+=" -zmq_port=8100 -max_recv_msg_size=$((32*1024*1024)) -max_send_msg_size=$((32*1024*1024))"
+    TELEMETRY_ARGS+=" -zmq_port=8100"
 fi
 
 GNMI_VRF=$(extract_field "$GNMI" '.vrf')
