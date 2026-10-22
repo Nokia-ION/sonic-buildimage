@@ -314,7 +314,11 @@ func (bc *BootzContext) handleResponse(ctx context.Context,
 
 	// Apply Configuration (Config + Image)
 	if err := bc.processBootstrapConfig(ctx, cfg, &signedResp); err != nil {
-		bc.ReportInfoStatus("Failed to process bootstrap config: %v", err)
+		bc.ReportFailureStatus(fmt.Sprintf("Failed to process bootstrap config: %v", err))
+		// Without this, the next boot would report SUCCESS for a failed run.
+		if rmErr := os.Remove(PendingReportFile); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("failed to remove pending status report", "err", rmErr)
+		}
 		return fmt.Errorf("failed to process bootstrap config: %w", err)
 	}
 

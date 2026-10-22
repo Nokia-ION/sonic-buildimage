@@ -4,6 +4,7 @@
 
 readonly BOOTZ_CONFIG="/host/bootz_config.json"
 readonly BOOTZ_CONFIG_TMP="/tmp/bootz_config.json"
+readonly BOOTZ_PENDING_REPORT="/host/bootz_pending_report.json"
 readonly BOOTZ_CLIENT="/usr/bin/bootz-client"
 
 log() {
@@ -59,7 +60,46 @@ check_status() {
     fi
 }
 
+# Report completion to the bootz server after booting an image installed by bootz-client.
+# The pending report is kept until the server accepts it, so a failure is retried on next boot.
+report_pending() {
+    local -a args=()
+    local descriptor cert key version
+
+    while read -r addr; do
+        args+=("--bootz-addr" "$addr")
+    done < <(jq -r '.bootz_addresses // [] | .[]' "$BOOTZ_PENDING_REPORT")
+
+    while read -r srv; do
+        args+=("--ntp-addr" "$srv")
+    done < <(jq -r '.ntp_servers // [] | .[]' "$BOOTZ_PENDING_REPORT")
+
+    descriptor=$(jq -r '.chassis_descriptor // empty' "$BOOTZ_PENDING_REPORT")
+    [[ -n "$descriptor" ]] && args+=("--chassis-descriptor" "$descriptor")
+
+    cert=$(jq -r '.idevid_public_cert // empty' "$BOOTZ_PENDING_REPORT")
+    key=$(jq -r '.idevid_private_key // empty' "$BOOTZ_PENDING_REPORT")
+    if [[ -n "$cert" && -n "$key" ]]; then
+        args+=("--idevid-public-cert" "$cert" "--idevid-private-key" "$key")
+    fi
+
+    version=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version 2>/dev/null)
+
+    log "reporting completion to bootz server ${args[*]}"
+    "$BOOTZ_CLIENT" --verbose "${args[@]}" --mode report \
+        --report-message "complete:Booted installed image ${version}"
+    local exit_code=$?
+    check_status "$exit_code"
+    rm -f "$BOOTZ_PENDING_REPORT"
+    log "bootz completion report succeeded"
+}
+
 cmd_boot() {
+    if [[ -f "$BOOTZ_PENDING_REPORT" ]]; then
+        report_pending
+        exit 0
+    fi
+
     if ! check_config; then
         log "$BOOTZ_CONFIG not present, skipping boot"
 	if grep -iq "SONiC" /etc/os-release 2>/dev/null; then
