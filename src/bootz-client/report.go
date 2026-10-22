@@ -226,8 +226,21 @@ func sendReportStream(
 		},
 	}
 
-	// Handshake completes the report delivery on the server side
-	return AuthenticateStream(ctx, cfg, c, idevidPriv, reportReq)
+	stream, err := AuthenticateStream(ctx, cfg, c, idevidPriv, reportReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// The server acknowledges the initial report once the nonce signature is verified.
+	resp, err := stream.Recv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to receive re-authentication ACK: %w", err)
+	}
+	if resp.GetReportStatusResponse() == nil {
+		return nil, fmt.Errorf("server sent unexpected response type; expected ReportStatusResponse")
+	}
+	slog.Info("re-authenticated with server", "message", req.StatusMessage)
+	return stream, nil
 }
 
 // resolveStatus maps a string level to the required Protobuf enums for both
@@ -287,6 +300,12 @@ func runReporting(ctx context.Context,
 	stream, err := sendReportStream(ctx, cfg, client, firstReq)
 	if err != nil {
 		return err
+	}
+
+	// The OpenConfig server treats the report that opens a stream as a re-authentication
+	// request and does not store its status, so send it again on the authenticated stream.
+	if err := sendReportStatus(stream, buildReportStatusRequest(chassis, bStatus, msg, cStatus)); err != nil {
+		return fmt.Errorf("failed to send message %s: %w", msg, err)
 	}
 
 	// iterate over the remaining messages, sending each in turn
