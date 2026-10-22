@@ -7,6 +7,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -112,9 +113,9 @@ func LoadIDevIDFromDisk(publicKeyFile, privateKeyFile string) (*rsa.PrivateKey, 
 	return privKey, pubKeyBytes, nil
 }
 
-// signNonceChallengeWithKey signs a hex-encoded nonce using an RSA private key.
-// It uses "Raw" PKCS#1 v1.5 signing (crypto.Hash(0)) to maintain
-// compatibility with the existing OpenSSL/C++ server-side verification.
+// signNonceChallengeWithKey signs a nonce using an RSA private key.
+// It uses PKCS#1 v1.5 with SHA-256, as verified by the OpenConfig Bootz server
+// for IDevID certificates signed with sha256WithRSAEncryption.
 // Note. This is for simulation purposes only.
 func signNonceChallengeWithKey(idevidPriv *rsa.PrivateKey, nonceHex string) ([]byte, error) {
 	if idevidPriv == nil {
@@ -123,13 +124,13 @@ func signNonceChallengeWithKey(idevidPriv *rsa.PrivateKey, nonceHex string) ([]b
 
 	slog.Info("processing nonce", "challenge", nonceHex, "length", len(nonceHex))
 
-	// Sign the raw nonce characters (ASCII hex) directly.
-	// Use crypto.Hash(0) so Go does not add a DigestInfo (SHA256 OID) header
+	// The server verifies over the nonce string exactly as it was sent.
+	digest := sha256.Sum256([]byte(nonceHex))
 	signedNonce, err := rsa.SignPKCS1v15(
 		rand.Reader,
 		idevidPriv,
-		crypto.Hash(0),
-		[]byte(nonceHex),
+		crypto.SHA256,
+		digest[:],
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign nonce: %w", err)
