@@ -217,6 +217,15 @@ func (bc *BootzContext) installImage(ctx context.Context, cfg *Config, localPath
 
 	// Trigger the reboot (if requested)
 	bc.ReportInfoStatus("SWI installation successful")
+
+	// The final SUCCESS report is sent by the installed image after reboot.
+	if cfg.ImageFile == "" {
+		if err := savePendingReport(cfg, bc.chassis); err != nil {
+			slog.Error("failed to save pending status report", "err", err)
+			bc.ReportInfoStatus("Final status will not be reported after reboot: %v", err)
+		}
+	}
+
 	if err := Reboot(bc.config); err != nil {
 		return fmt.Errorf("SWI installed but reboot failed: %w", err)
 	}

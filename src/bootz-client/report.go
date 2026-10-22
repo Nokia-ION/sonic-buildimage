@@ -5,14 +5,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"log/slog"
 
 	bpb "github.com/openconfig/bootz/proto/bootz"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/encoding/prototext"
 )
 
 const (
@@ -23,7 +26,46 @@ const (
 
 	// Delimiter for status/message pairs
 	StatusDelimiter = ":"
+
+	// PendingReportFile tells the next boot to report completion to the Bootz
+	// server. It must live on /host to survive the image install.
+	PendingReportFile = "/host/bootz_pending_report.json"
 )
+
+// pendingReport holds the settings needed to report completion after reboot.
+type pendingReport struct {
+	BootzAddresses    []string `json:"bootz_addresses"`
+	NtpServers        []string `json:"ntp_servers,omitempty"`
+	ChassisDescriptor string   `json:"chassis_descriptor"`
+	IdevidPublicCert  string   `json:"idevid_public_cert,omitempty"`
+	IdevidPrivateKey  string   `json:"idevid_private_key,omitempty"`
+}
+
+// savePendingReport records how to reach the Bootz server so that the
+// installed image can send the final status report once it is running.
+func savePendingReport(cfg *Config, chassis *bpb.ChassisDescriptor) error {
+	descriptor, err := prototext.Marshal(chassis)
+	if err != nil {
+		return fmt.Errorf("marshal chassis descriptor: %w", err)
+	}
+
+	data, err := json.MarshalIndent(pendingReport{
+		BootzAddresses:    cfg.BootzAddresses,
+		NtpServers:        cfg.NtpServers,
+		ChassisDescriptor: string(descriptor),
+		IdevidPublicCert:  cfg.IdevidCertFile,
+		IdevidPrivateKey:  cfg.IdevidKeyFile,
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal pending report: %w", err)
+	}
+
+	if err := os.WriteFile(PendingReportFile, data, 0600); err != nil {
+		return fmt.Errorf("write %s: %w", PendingReportFile, err)
+	}
+	slog.Info("saved pending status report for next boot", "path", PendingReportFile)
+	return nil
+}
 
 // buildReportStatusRequest constructs a Bootz-compliant ReportStatusRequest
 // from the current chassis and card states.
@@ -34,11 +76,21 @@ func buildReportStatusRequest(
 	cardStatus bpb.ControlCardState_ControlCardStatus) *bpb.ReportStatusRequest {
 
 	// Map control cards to the current states
-	states := make([]*bpb.ControlCardState, 0, len(chassis.GetControlCards()))
-	for _, card := range chassis.GetControlCards() {
+	cards := chassis.GetControlCards()
+	states := make([]*bpb.ControlCardState, 0, len(cards)+1)
+	for _, card := range cards {
 		states = append(states, &bpb.ControlCardState{
 			Status:       cardStatus,
 			SerialNumber: card.GetSerialNumber(),
+		})
+	}
+
+	// A fixed form factor chassis must report a single state matching the
+	// chassis serial number, otherwise the server cannot record the status.
+	if len(cards) == 0 {
+		states = append(states, &bpb.ControlCardState{
+			Status:       cardStatus,
+			SerialNumber: chassis.GetSerialNumber(),
 		})
 	}
 
@@ -122,7 +174,7 @@ func (bc *BootzContext) ReportInfoStatus(format string, args ...any) error {
 // ReportFailureStatus is a helper function that sends a failure status
 // message to the Bootz server.
 //
-// It uses BOOTSTRAP_STATUS_UNSPECIFIED and CONTROL_CARD_STATUS_UNINITIALIZED
+// It uses BOOTSTRAP_STATUS_FAILURE and CONTROL_CARD_STATUS_NOT_INITIALIZED
 func (bc *BootzContext) ReportFailureStatus(msg string) error {
 	req := buildReportStatusRequest(
 		bc.chassis,
