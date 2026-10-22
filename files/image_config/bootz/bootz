@@ -6,13 +6,15 @@ readonly BOOTZ_CONFIG="/host/bootz_config.json"
 readonly BOOTZ_CONFIG_TMP="/tmp/bootz_config.json"
 readonly BOOTZ_PENDING_REPORT="/host/bootz_pending_report.json"
 readonly BOOTZ_CLIENT="/usr/bin/bootz-client"
+readonly BOOTZ_WRAPPER="$(readlink -f "$0")"
+readonly BOOTZ_REPORT_UNIT="bootz-report"
 
 log() {
     echo "bootz: $*"
 }
 
 usage() {
-    echo "Usage: $0 {boot|provision|shut}" >&2
+    echo "Usage: $0 {boot|report|provision|shut}" >&2
     exit 1
 }
 
@@ -94,19 +96,41 @@ report_pending() {
     log "bootz completion report succeeded"
 }
 
+# bootz.service is pulled in by sonic.target, and the management interface is only
+# configured after sonic.target, so boot-time reports must not block bootz.service.
 cmd_boot() {
-    if [[ -f "$BOOTZ_PENDING_REPORT" ]]; then
-        report_pending
-        exit 0
-    fi
-
-    if ! check_config; then
+    if [[ ! -f "$BOOTZ_PENDING_REPORT" ]] && ! check_config; then
         log "$BOOTZ_CONFIG not present, skipping boot"
 	if grep -iq "SONiC" /etc/os-release 2>/dev/null; then
 	    exit 1
 	else
 	    exit 0
 	fi
+    fi
+
+    log "starting boot report in the background as $BOOTZ_REPORT_UNIT.service"
+    systemd-run --no-block --collect --unit="$BOOTZ_REPORT_UNIT" \
+        --description="BootZ boot status report" \
+        --property=After=interfaces-config.service \
+        --property=StandardOutput=journal+console \
+        --property=StandardError=journal+console \
+        "$BOOTZ_WRAPPER" report
+    local exit_code=$?
+    if [ "$exit_code" -ne 0 ]; then
+        log "failed to start $BOOTZ_REPORT_UNIT.service"
+        exit "$exit_code"
+    fi
+}
+
+cmd_report() {
+    if [[ -f "$BOOTZ_PENDING_REPORT" ]]; then
+        report_pending
+        exit 0
+    fi
+
+    if ! check_config; then
+        log "$BOOTZ_CONFIG not present, nothing to report"
+        exit 0
     fi
 
     local -a bootz_args ntp_args
@@ -155,6 +179,9 @@ cmd_shut() {
 case "$1" in
     boot)
         cmd_boot
+        ;;
+    report)
+        cmd_report
         ;;
     provision)
         cmd_provision
