@@ -214,6 +214,7 @@ func (bc *BootzContext) installImage(ctx context.Context, cfg *Config, localPath
 	}
 	slog.Info("sonic installer completed successfully",
 		"output", string(output))
+	bc.imageInstalled = true
 
 	// Trigger the reboot (if requested)
 	bc.ReportInfoStatus("SWI installation successful")

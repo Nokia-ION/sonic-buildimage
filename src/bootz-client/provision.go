@@ -126,7 +126,8 @@ func (bc *BootzContext) writeBootstrapJsonData(resp *bpb.BootstrapDataResponse, 
 		return err
 	}
 
-	if err := os.WriteFile(filename, jsonData, 0644); err != nil {
+	// The bootstrap data can carry certz private keys.
+	if err := os.WriteFile(filename, jsonData, 0600); err != nil {
 		return err
 	}
 	bc.ReportInfoStatus("Wrote bootstrap data to file %s", filename)
@@ -193,6 +194,16 @@ func (bc *BootzContext) processBootstrapConfig(
 			"filename", cfg.BootstrapJsonFile)
 	}
 
+	// Staged before the image step, which may reboot into an image that
+	// installs them on first boot.
+	certzProfiles, err := bc.stageCertzProfiles(data)
+	if err != nil {
+		return fmt.Errorf("failed to process certz profiles: %w", err)
+	}
+	if certzProfiles > 0 {
+		bc.ReportInfoStatus("Staged %d certz profile(s)", certzProfiles)
+	}
+
 	// Check if the IntendedImage message exists
 	intendedImage := data.GetIntendedImage()
 	if intendedImage == nil {
@@ -206,6 +217,18 @@ func (bc *BootzContext) processBootstrapConfig(
 		}
 		if cfg.Verbose {
 			LogBanner("Intended Image Complete")
+		}
+	}
+
+	if certzProfiles > 0 {
+		if bc.imageInstalled && cfg.ImageFile == "" {
+			slog.Info("certz profiles will be installed by the new image on first boot",
+				"path", PendingCertzDir)
+		} else {
+			if err := InstallCertzProfiles(); err != nil {
+				return fmt.Errorf("failed to install certz profiles: %w", err)
+			}
+			bc.ReportInfoStatus("Installed %d certz profile(s)", certzProfiles)
 		}
 	}
 
@@ -318,6 +341,9 @@ func (bc *BootzContext) handleResponse(ctx context.Context,
 		// Without this, the next boot would report SUCCESS for a failed run.
 		if rmErr := os.Remove(PendingReportFile); rmErr != nil && !os.IsNotExist(rmErr) {
 			slog.Warn("failed to remove pending status report", "err", rmErr)
+		}
+		if rmErr := os.RemoveAll(PendingCertzDir); rmErr != nil {
+			slog.Warn("failed to remove staged certz profiles", "err", rmErr)
 		}
 		return fmt.Errorf("failed to process bootstrap config: %w", err)
 	}

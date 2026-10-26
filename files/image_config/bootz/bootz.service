@@ -1,6 +1,7 @@
 [Unit]
 Description=BootZ Bootstrap Service
-After=network-online.target rc-local.service
+After=network-online.target rc-local.service config-setup.service
+Before=gnmi.service
 Wants=network-online.target
 
 [Service]
