@@ -85,6 +85,9 @@ type BootzContext struct {
 
 	// global config
 	config *Config
+
+	// imageInstalled is set once a new image has been installed in this session.
+	imageInstalled bool
 }
 
 // version info
@@ -204,7 +207,8 @@ var (
 	mode = flag.StringP(
 		"mode", "M",
 		"provision",
-		"Operation mode: 'provision' for full run, 'report' to send a status message.",
+		"Operation mode: 'provision' for full run, 'report' to send a status message, "+
+			"'install-certz' to install certz profiles staged by an earlier provision run.",
 	)
 	reportMessages = flag.StringArrayP(
 		"report-message", "R",
@@ -324,6 +328,10 @@ func setupFlagsConfig() {
 // validateFlags checks the command-line arguments for logical consistency.
 // It returns an error with a user-friendly message if validation fails.
 func validateFlags() error {
+	if *mode == "install-certz" {
+		return nil
+	}
+
 	// Check Mandatory Bootz Address
 	if len(*bootzAddresses) == 0 {
 		return fmt.Errorf("mandatory option --bootz-addr (-a) is missing")
@@ -416,6 +424,14 @@ func main() {
 	}
 
 	InitLogging(*verbose)
+
+	if *mode == "install-certz" {
+		if err := InstallCertzProfiles(); err != nil {
+			slog.Error("failed to install certz profiles", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// initialise global config
 	cfg := &Config{
