@@ -1909,6 +1909,7 @@ class BGPConfigDaemon:
                    ('enforce_multihop',                     '{no:no-prefix}neighbor {} enforce-multihop', ['true', 'false']),
                    ('override_capability',                  '{no:no-prefix}neighbor {} override-capability', ['true', 'false']),
                    ('peer_port',                            '{no:no-prefix}neighbor {} port {}'),
+                   ('tcp_mss',                              '{no:no-prefix}neighbor {} tcp-mss {}'),
                    ('strict_capability_match',              '{no:no-prefix}neighbor {} strict-capability-match', ['true', 'false'])
     ]
 
@@ -1930,7 +1931,10 @@ class BGPConfigDaemon:
                       ('weight',                                            '{no:no-prefix}neighbor {} weight {}'),
                       ('as_override',                                       '{no:no-prefix}neighbor {} as-override', ['true', 'false']),
                       ('send_community',                                    '{no:no-prefix}neighbor {} send-community {}', hdl_send_com),
-                      ('tx_add_paths',                                      '{no:no-prefix}neighbor {} {:tx-add-paths}'),
+                      # FRR's "no addpath-tx-best-selected" also clears addpath-tx-all-paths, so the
+                      # count is removed first and its removal reissues the mode the row still holds.
+                      ('tx_add_best_path_count',                            '{no:no-prefix}neighbor {} addpath-tx-best-selected {}'),
+                      (['tx_add_paths', '++tx_add_best_path_count'],        '{no:no-prefix}neighbor {} {:tx-add-paths}'),
                       (['++unchanged_as_path',
                         '++unchanged_med', '++unchanged_nexthop'],          '{no:no-prefix}neighbor {} attribute-unchanged {:uchg-as-path} {:uchg-med} {:uchg-nh}', hdl_attr_unchanged),
                       ('filter_list_in',                                    '{no:no-prefix}neighbor {} filter-list {} in'),
