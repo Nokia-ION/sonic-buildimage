@@ -55,6 +55,25 @@ PIPE_BATCH_MAX_COUNT = 50
 RowOp = namedtuple('RowOp', ['key', 'fields', 'removed'])
 
 
+# A non-negative integer FRR reports, or None when it reports none or not a
+# number. A divisor turns FRR's milliseconds into the seconds the model uses.
+def frr_uint(value, divisor=1):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return None
+    if num < 0:
+        return None
+    return num // divisor
+
+
+# FRR's lastResetCode for a session torn down by a NOTIFICATION, by direction.
+PEER_DOWN_NOTIFY_RECEIVED = 13
+PEER_DOWN_NOTIFY_SEND = 14
+
+
 # Fields that were published for a row last time and are not in the new set.
 # Ordered so that the command a caller builds from it is stable to compare.
 def departed_fields(previous, fields):
@@ -649,6 +668,45 @@ class BgpStateGet:
             if 1 <= port <= 65535:
                 fields['remote_port'] = str(port)
 
+        local_as = frr_uint(peer_info.get('localAs'))
+        if local_as:
+            fields['local_as'] = str(local_as)
+
+        # FRR flags the link type of the session; a confederation link carries
+        # neither and is left out.
+        if peer_info.get('nbrInternalLink'):
+            fields['peer_type'] = 'internal'
+        elif peer_info.get('nbrExternalLink'):
+            fields['peer_type'] = 'external'
+
+        description = peer_info.get('nbrDesc')
+        if description:
+            fields['description'] = description
+
+        # The timers in effect: the negotiated hold time and keepalive, and the
+        # connect retry and minimum advertisement interval FRR runs with.
+        for field, key, divisor in (('hold_time', 'bgpTimerHoldTimeMsecs', 1000),
+                                    ('keepalive_interval', 'bgpTimerKeepAliveIntervalMsecs', 1000),
+                                    ('connect_retry', 'connectRetryTimer', 1),
+                                    ('min_adv_interval', 'minBtwnAdvertisementRunsTimerMsecs', 1000)):
+            value = frr_uint(peer_info.get(key), divisor)
+            if value is not None:
+                fields[field] = str(value)
+
+        # The MSS of the session's socket, which FRR reports as 0 until one is
+        # connected.
+        tcp_mss = frr_uint(peer_info.get('bgpTcpMssSynced'))
+        if tcp_mss:
+            fields['tcp_mss'] = str(tcp_mss)
+
+        # The TTL FRR allows an eBGP session; above 1 the peer is multihop.
+        hops = frr_uint(peer_info.get('externalBgpNbrMaxHopsAway'))
+        if hops and peer_info.get('nbrExternalLink'):
+            fields['ebgp_multihop_ttl'] = str(hops)
+
+        # peerBfdInfo is present exactly while BFD is configured for the peer.
+        fields['bfd'] = 'true' if isinstance(peer_info.get('peerBfdInfo'), dict) else 'false'
+
         # Absent until a session negotiates something, which keeps a peer that
         # never came up from reporting capabilities it only ever advertised.
         caps = negotiated_capabilities(peer_info.get('neighborCapabilities'))
@@ -693,6 +751,22 @@ class BgpStateGet:
                 fields['last_notification_error_code'] = str(code)
             except ValueError:
                 pass
+            if len(err_hex) >= 4:
+                try:
+                    fields['last_notification_error_subcode'] = str(int(err_hex[2:4], 16))
+                except ValueError:
+                    pass
+
+        # FRR keeps the NOTIFICATION behind the last reset only, and tells which
+        # way it went by the reset code. Its time is the reset's, which FRR
+        # reports as an age; it is stored as an epoch in seconds.
+        reset_code = frr_uint(peer_info.get('lastResetCode'))
+        direction = {PEER_DOWN_NOTIFY_SEND: 'sent', PEER_DOWN_NOTIFY_RECEIVED: 'received'}.get(reset_code)
+        if direction and 'last_notification_error_code' in fields:
+            fields['last_notification_direction'] = direction
+            age = frr_uint(peer_info.get('lastResetTimerMsecs'), 1000)
+            if age is not None:
+                fields['last_notification_time'] = str(int(time.time()) - age)
 
         return fields
 
@@ -723,6 +797,23 @@ class BgpStateGet:
         export_policy = af_info.get('routeMapForOutgoingAdvertisements')
         if export_policy:
             fields['export_policy'] = export_policy
+
+        # The community types FRR sends, which it spells as standard, extended
+        # and large joined by "And", and omits or leaves empty when none.
+        communities = af_info.get('commAttriSentToNbr')
+        if isinstance(communities, str) and communities:
+            sent = [c for c in ('standard', 'extended', 'large') if c in communities.split('And')]
+            if sent:
+                fields['send_community'] = ','.join(sent)
+
+        # The prefix limit FRR enforces, present only while one is configured.
+        max_prefixes = frr_uint(af_info.get('prefixAllowedMax'))
+        if max_prefixes is not None:
+            fields['max_prefixes'] = str(max_prefixes)
+            fields['prevent_teardown'] = 'true' if af_info.get('prefixAllowedMaxWarning') else 'false'
+            threshold = frr_uint(af_info.get('prefixAllowedWarningThresh'))
+            if threshold is not None:
+                fields['warning_threshold_pct'] = str(threshold)
 
         return fields
 

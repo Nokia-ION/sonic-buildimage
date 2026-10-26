@@ -170,9 +170,39 @@ def test_applied_fields_from_live_shape(bgp_mon):
             'local_address': '11.0.0.154',
             'remote_address': '11.0.0.155',
             'local_port': '48810',
-            'remote_port': '179'
+            'remote_port': '179',
+            'local_as': '65200',
+            'bfd': 'false'
         }
     }
+
+
+def test_applied_session_parameters(bgp_mon):
+    """The link type, description, timers in effect, session MSS, multihop TTL
+    and BFD are mapped from the neighbor-show JSON."""
+    fields = bgp_mon.build_applied_fields({
+        "remoteAs": 65300, "localAs": 65111, "nbrExternalLink": True, "nbrDesc": "core link",
+        "bgpTimerHoldTimeMsecs": 90000, "bgpTimerKeepAliveIntervalMsecs": 30000,
+        "connectRetryTimer": 10, "minBtwnAdvertisementRunsTimerMsecs": 0,
+        "bgpTcpMssSynced": 1448, "externalBgpNbrMaxHopsAway": 5, "peerBfdInfo": {"type": "single hop"}})
+    assert {k: fields[k] for k in ('local_as', 'peer_type', 'description', 'hold_time', 'keepalive_interval',
+                                   'connect_retry', 'min_adv_interval', 'tcp_mss', 'ebgp_multihop_ttl', 'bfd')} == {
+        'local_as': '65111', 'peer_type': 'external', 'description': 'core link', 'hold_time': '90',
+        'keepalive_interval': '30', 'connect_retry': '10', 'min_adv_interval': '0', 'tcp_mss': '1448',
+        'ebgp_multihop_ttl': '5', 'bfd': 'true'}
+
+
+def test_applied_internal_peer_has_no_multihop_ttl(bgp_mon):
+    """An iBGP peer reports its link as internal and has no eBGP TTL."""
+    fields = bgp_mon.build_applied_fields({"nbrInternalLink": True, "internalBgpNbrMaxHopsAway": 255})
+    assert fields['peer_type'] == 'internal'
+    assert 'ebgp_multihop_ttl' not in fields
+
+
+def test_applied_tcp_mss_absent_until_connected(bgp_mon):
+    """FRR reports a synced MSS of 0 while no socket is connected."""
+    fields = bgp_mon.build_applied_fields({"bgpTcpMssSynced": 0})
+    assert 'tcp_mss' not in fields
 
 
 def test_applied_vrf_metadata_is_not_a_peer(bgp_mon):
@@ -461,6 +491,32 @@ def test_stats_fields_from_live_shape(bgp_mon):
     }
 
 
+def test_stats_last_notification_sent(bgp_mon):
+    """A reset by a NOTIFICATION sent carries its code, subcode, direction and
+    the epoch it happened at."""
+    with patch('bgpmon.bgpmon.time.time', return_value=1000000.4):
+        fields = bgp_mon.build_stats_fields({"lastErrorCodeSubcode": "0602", "lastResetCode": 14,
+                                             "lastResetTimerMsecs": 5000})
+    assert {k: fields[k] for k in ('last_notification_error_code', 'last_notification_error_subcode',
+                                   'last_notification_direction', 'last_notification_time')} == {
+        'last_notification_error_code': '6', 'last_notification_error_subcode': '2',
+        'last_notification_direction': 'sent', 'last_notification_time': '999995'}
+
+
+def test_stats_last_notification_received(bgp_mon):
+    """A reset by a NOTIFICATION received is told apart by its reset code."""
+    fields = bgp_mon.build_stats_fields({"lastErrorCodeSubcode": "0401", "lastResetCode": 13,
+                                         "lastResetTimerMsecs": 0})
+    assert fields['last_notification_direction'] == 'received'
+    assert fields['last_notification_error_code'] == '4'
+
+
+def test_stats_reset_without_notification_has_no_direction(bgp_mon):
+    """A reset FRR did not tear down with a NOTIFICATION reports none."""
+    fields = bgp_mon.build_stats_fields({"lastResetCode": 27, "lastResetTimerMsecs": 9000})
+    assert not any(k.startswith('last_notification') for k in fields)
+
+
 def test_stats_last_established_absent_while_session_is_down(bgp_mon):
     """FRR emits bgpTimerUpEstablishedEpoch only while the session is
     Established, so a down session must report no established epoch rather than
@@ -594,6 +650,21 @@ def test_af_stats_fields_from_live_shape(bgp_mon):
             'prefixes_sent': '1'
         }
     }
+
+
+def test_af_stats_send_community_and_prefix_limit(bgp_mon):
+    """The community types sent and the prefix limit FRR enforces are mapped
+    from the address family entry."""
+    fields = bgp_mon.build_af_stats_fields({"commAttriSentToNbr": "standardAndlarge", "prefixAllowedMax": 100,
+                                            "prefixAllowedMaxWarning": True, "prefixAllowedWarningThresh": 80})
+    assert fields == {'send_community': 'standard,large', 'max_prefixes': '100',
+                      'prevent_teardown': 'true', 'warning_threshold_pct': '80'}
+
+
+def test_af_stats_no_prefix_limit_and_no_communities(bgp_mon):
+    """A family with no limit and no community sent reports neither."""
+    fields = bgp_mon.build_af_stats_fields({"commAttriSentToNbr": "", "acceptedPrefixCounter": 0})
+    assert fields == {'prefixes_received': '0'}
 
 
 def test_af_stats_sent_absent_until_update_subgroup_forms(bgp_mon):
