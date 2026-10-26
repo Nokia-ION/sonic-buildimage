@@ -6,11 +6,13 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	ownershipvoucher "github.com/openconfig/bootz/common/ownership_voucher"
 	"github.com/openconfig/bootz/common/signature"
@@ -204,6 +206,12 @@ func (bc *BootzContext) processBootstrapConfig(
 		bc.ReportInfoStatus("Staged %d certz profile(s)", certzProfiles)
 	}
 
+	// Validated before the image step, which stages it for the new image.
+	bc.vendorConfig = data.GetBootConfig().GetVendorConfig()
+	if err := validateVendorConfig(bc.vendorConfig); err != nil {
+		return err
+	}
+
 	// Check if the IntendedImage message exists
 	intendedImage := data.GetIntendedImage()
 	if intendedImage == nil {
@@ -233,12 +241,15 @@ func (bc *BootzContext) processBootstrapConfig(
 	}
 
 	// Vendor config is only attribute of interest (for now)
-	config := data.GetBootConfig().GetVendorConfig()
+	config := bc.vendorConfig
 	configLen := len(config)
 	limit := 64
 
 	if configLen == 0 {
 		slog.Warn("vendor config is empty; skipping file write.")
+	} else if bc.imageInstalled && cfg.ImageFile == "" {
+		slog.Info("vendor config will be applied by the new image on first boot",
+			"path", PendingConfigDBFile)
 	} else {
 		content := string(config)
 		isTruncated := false
@@ -272,6 +283,45 @@ func (bc *BootzContext) processBootstrapConfig(
 	}
 
 	slog.Info("completed processing bootstrap config")
+	return nil
+}
+
+// PendingConfigDBFile is the startup config handed to a newly installed image.
+const PendingConfigDBFile = "/host/old_config/config_db.json"
+
+// validateVendorConfig checks that a non-empty vendor config is a
+// config_db.json object.
+func validateVendorConfig(config []byte) error {
+	if len(config) == 0 {
+		return nil
+	}
+	var tables map[string]json.RawMessage
+	if err := json.Unmarshal(config, &tables); err != nil {
+		return fmt.Errorf("vendor config is not a valid config_db.json object: %w", err)
+	}
+	if tables == nil {
+		return fmt.Errorf("vendor config is not a valid config_db.json object: got null")
+	}
+	if _, ok := tables["DEVICE_METADATA"]; !ok {
+		slog.Warn("vendor config has no DEVICE_METADATA table; it replaces the whole startup config")
+	}
+	return nil
+}
+
+// stageVendorConfig places the vendor config where the new image's first
+// boot migrates it into /etc/sonic/config_db.json (rc.local moves
+// /host/old_config to /etc/sonic/old_config and config-setup loads it).
+func stageVendorConfig(config []byte) error {
+	if len(config) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(PendingConfigDBFile), 0755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(PendingConfigDBFile), err)
+	}
+	if err := writeFileAtomic(PendingConfigDBFile, config, 0644); err != nil {
+		return fmt.Errorf("write %s: %w", PendingConfigDBFile, err)
+	}
+	slog.Info("staged vendor config for the new image", "path", PendingConfigDBFile)
 	return nil
 }
 

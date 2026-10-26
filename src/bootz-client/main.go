@@ -88,6 +88,9 @@ type BootzContext struct {
 
 	// imageInstalled is set once a new image has been installed in this session.
 	imageInstalled bool
+
+	// vendorConfig is the config_db.json content from the bootstrap data.
+	vendorConfig []byte
 }
 
 // version info
