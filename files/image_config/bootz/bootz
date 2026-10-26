@@ -5,6 +5,7 @@
 readonly BOOTZ_CONFIG="/host/bootz_config.json"
 readonly BOOTZ_CONFIG_TMP="/tmp/bootz_config.json"
 readonly BOOTZ_PENDING_REPORT="/host/bootz_pending_report.json"
+readonly BOOTZ_PENDING_CERTZ="/host/bootz_certz"
 readonly BOOTZ_CLIENT="/usr/bin/bootz-client"
 readonly BOOTZ_WRAPPER="$(readlink -f "$0")"
 readonly BOOTZ_REPORT_UNIT="bootz-report"
@@ -87,9 +88,10 @@ report_pending() {
 
     version=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version 2>/dev/null)
 
+    local message="${1:-complete:Booted installed image ${version}}"
+
     log "reporting completion to bootz server ${args[*]}"
-    "$BOOTZ_CLIENT" --verbose "${args[@]}" --mode report \
-        --report-message "complete:Booted installed image ${version}"
+    "$BOOTZ_CLIENT" --verbose "${args[@]}" --mode report --report-message "$message"
     local exit_code=$?
     check_status "$exit_code"
     rm -f "$BOOTZ_PENDING_REPORT"
@@ -99,6 +101,17 @@ report_pending() {
 # bootz.service is pulled in by sonic.target, and the management interface is only
 # configured after sonic.target, so boot-time reports must not block bootz.service.
 cmd_boot() {
+    local -a report_args=()
+
+    # Must finish before gnmi.service starts, which is ordered after sonic.target.
+    if [[ -d "$BOOTZ_PENDING_CERTZ" ]]; then
+        log "installing certz profiles staged in $BOOTZ_PENDING_CERTZ"
+        if ! "$BOOTZ_CLIENT" --verbose --mode install-certz; then
+            log "failed to install certz profiles"
+            report_args=("error:Booted installed image but failed to install certz profiles")
+        fi
+    fi
+
     if [[ ! -f "$BOOTZ_PENDING_REPORT" ]] && ! check_config; then
         log "$BOOTZ_CONFIG not present, skipping boot"
 	if grep -iq "SONiC" /etc/os-release 2>/dev/null; then
@@ -114,7 +127,7 @@ cmd_boot() {
         --property=After=interfaces-config.service \
         --property=StandardOutput=journal+console \
         --property=StandardError=journal+console \
-        "$BOOTZ_WRAPPER" report
+        "$BOOTZ_WRAPPER" report "${report_args[@]}"
     local exit_code=$?
     if [ "$exit_code" -ne 0 ]; then
         log "failed to start $BOOTZ_REPORT_UNIT.service"
@@ -124,7 +137,7 @@ cmd_boot() {
 
 cmd_report() {
     if [[ -f "$BOOTZ_PENDING_REPORT" ]]; then
-        report_pending
+        report_pending "$@"
         exit 0
     fi
 
@@ -133,12 +146,13 @@ cmd_report() {
         exit 0
     fi
 
-    local -a bootz_args ntp_args
+    local -a bootz_args ntp_args msg_args=()
     bootz_addr_args bootz_args
     ntp_addr_args ntp_args
+    [[ -n "$1" ]] && msg_args=("--report-message" "$1")
 
-    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode report"
-    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode report
+    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode report ${msg_args[*]}"
+    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode report "${msg_args[@]}"
     local exit_code=$?
     check_status "$exit_code"
     log "bootz report command succeeded"
@@ -181,7 +195,8 @@ case "$1" in
         cmd_boot
         ;;
     report)
-        cmd_report
+        shift
+        cmd_report "$@"
         ;;
     provision)
         cmd_provision
