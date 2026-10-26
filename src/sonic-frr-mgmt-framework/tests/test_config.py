@@ -645,6 +645,81 @@ def test_peer_group_maximum_prefix_force(run_cmd):
                               {'max_prefix_limit': '50', 'max_prefix_force': 'true'})
     assert maximum_prefix_cmds(run_cmd)[-1] == 'neighbor PG1 maximum-prefix 50 force'
 
+def neighbor_cmds(run_cmd, word):
+    """The neighbor commands issued that carry word, with the spaces optional
+    arguments leave collapsed."""
+    cmds = []
+    for call in run_cmd.call_args_list:
+        last = ' '.join(call[0][1][-1].split())
+        if word in last:
+            cmds.append(last)
+    return cmds
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_neighbor_tcp_mss(run_cmd):
+    """tcp_mss sets the TCP maximum segment size of the session, for a neighbor
+    and a peer-group alike; clearing it removes the setting."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR']('BGP_NEIGHBOR', 'default|10.0.0.1', {'asn': '200', 'tcp_mss': '1400'})
+    assert neighbor_cmds(run_cmd, 'tcp-mss') == ['neighbor 10.0.0.1 tcp-mss 1400']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR']('BGP_NEIGHBOR', 'default|10.0.0.1', {'asn': '200'})
+    assert neighbor_cmds(run_cmd, 'tcp-mss') == ['no neighbor 10.0.0.1 tcp-mss 1400']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_PEER_GROUP']('BGP_PEER_GROUP', 'default|PG1', {'asn': '300', 'tcp_mss': '1200'})
+    assert neighbor_cmds(run_cmd, 'tcp-mss') == ['neighbor PG1 tcp-mss 1200']
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_neighbor_addpath_tx_best_selected(run_cmd):
+    """tx_add_best_path_count advertises that many best paths per prefix, for a
+    neighbor and a peer-group address family alike. FRR's no form of it also
+    clears addpath-tx-all-paths, so a switch to all paths removes the count
+    first."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+    key = 'default|10.0.0.1|ipv4_unicast'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'tx_add_best_path_count': '3'})
+    assert neighbor_cmds(run_cmd, 'addpath') == ['neighbor 10.0.0.1 addpath-tx-best-selected 3']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'tx_add_best_path_count': '2'})
+    assert neighbor_cmds(run_cmd, 'addpath')[-1] == 'neighbor 10.0.0.1 addpath-tx-best-selected 2'
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'tx_add_paths': 'tx_all_paths'})
+    assert neighbor_cmds(run_cmd, 'addpath') == ['no neighbor 10.0.0.1 addpath-tx-best-selected 2',
+                                                 'neighbor 10.0.0.1 addpath-tx-all-paths']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'tx_add_best_path_count': '3'})
+    assert neighbor_cmds(run_cmd, 'addpath') == ['neighbor 10.0.0.1 addpath-tx-best-selected 3',
+                                                 'no neighbor 10.0.0.1 addpath-tx-all-paths']
+
+    # A writer that sets the mode and removes the count in two updates leaves
+    # the mode in place: the count's removal reissues it.
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'tx_add_paths': 'tx_all_paths', 'tx_add_best_path_count': '3'})
+    hdlr['BGP_NEIGHBOR_AF']('BGP_NEIGHBOR_AF', key, {'tx_add_paths': 'tx_all_paths'})
+    assert neighbor_cmds(run_cmd, 'addpath')[-2:] == ['no neighbor 10.0.0.1 addpath-tx-best-selected 3',
+                                                      'neighbor 10.0.0.1 addpath-tx-all-paths']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_PEER_GROUP_AF']('BGP_PEER_GROUP_AF', 'default|PG1|ipv6_unicast', {'tx_add_best_path_count': '4'})
+    assert neighbor_cmds(run_cmd, 'addpath') == ['neighbor PG1 addpath-tx-best-selected 4']
+
 def aggregate_cmds(run_cmd):
     """The aggregate-address commands issued, with the spaces optional arguments
     leave collapsed."""
