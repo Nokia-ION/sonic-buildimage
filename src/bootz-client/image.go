@@ -221,6 +221,9 @@ func (bc *BootzContext) installImage(ctx context.Context, cfg *Config, localPath
 
 	// The final SUCCESS report is sent by the installed image after reboot.
 	if cfg.ImageFile == "" {
+		if err := stageVendorConfig(bc.vendorConfig); err != nil {
+			return fmt.Errorf("SWI installed but staging vendor config failed: %w", err)
+		}
 		if err := savePendingReport(cfg, bc.chassis); err != nil {
 			slog.Error("failed to save pending status report", "err", err)
 			bc.ReportInfoStatus("Final status will not be reported after reboot: %v", err)
