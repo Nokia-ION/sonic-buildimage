@@ -309,6 +309,13 @@ module sonic-bgp-common {
             description "Peer port number";
         }
 
+        leaf tcp_mss {
+            type uint16 {
+                range "1..65535";
+            }
+            description "TCP maximum segment size of the session to this neighbor.";
+        }
+
         leaf shutdown_message {
             type string {
                 length "1..127";
@@ -447,6 +454,13 @@ module sonic-bgp-common {
         leaf tx_add_paths {
             type bgp_tx_add_paths_type;
             description "Advertise all paths or best path per AS using add path";
+        }
+
+        leaf tx_add_best_path_count {
+            type uint8 {
+                range "1..6";
+            }
+            description "Advertise this many best paths per prefix using add path.";
         }
 
         leaf unchanged_as_path {
