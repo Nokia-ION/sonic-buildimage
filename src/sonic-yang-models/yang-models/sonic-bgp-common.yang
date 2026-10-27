@@ -316,6 +316,11 @@ module sonic-bgp-common {
             description "TCP maximum segment size of the session to this neighbor.";
         }
 
+        leaf graceful_restart_enable {
+            type boolean;
+            description "Enable graceful restart for this neighbor; when absent or false the global setting applies.";
+        }
+
         leaf shutdown_message {
             type string {
                 length "1..127";

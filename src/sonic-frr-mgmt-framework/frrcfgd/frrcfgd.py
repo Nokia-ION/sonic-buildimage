@@ -1892,7 +1892,7 @@ class BGPConfigDaemon:
                    ('local_addr',                           '{no:no-prefix}neighbor {} update-source {}'),
                    ('name',                                 '{no:no-prefix}neighbor {} description {}'),
                    (['ebgp_multihop', '+ebgp_multihop_ttl'],'{no:no-prefix}neighbor {} ebgp-multihop {}', ['true', 'false']),
-                   ('auth_password',                        '{no:no-prefix}neighbor {} password {} encrypted'),
+                   ('auth_password',                        '{no:no-prefix}neighbor {} password {}'),
                    (['keepalive', 'holdtime'],              '{no:no-prefix}neighbor {} timers {} {}'),
                    ('conn_retry',                           '{no:no-prefix}neighbor {} timers connect {}'),
                    ('min_adv_interval',                     '{no:no-prefix}neighbor {} advertisement-interval {}'),
@@ -1910,6 +1910,7 @@ class BGPConfigDaemon:
                    ('override_capability',                  '{no:no-prefix}neighbor {} override-capability', ['true', 'false']),
                    ('peer_port',                            '{no:no-prefix}neighbor {} port {}'),
                    ('tcp_mss',                              '{no:no-prefix}neighbor {} tcp-mss {}'),
+                   ('graceful_restart_enable',              '{no:no-prefix}neighbor {} graceful-restart', ['true', 'false']),
                    ('strict_capability_match',              '{no:no-prefix}neighbor {} strict-capability-match', ['true', 'false'])
     ]
 
@@ -2881,12 +2882,13 @@ class BGPConfigDaemon:
             dval.op = CachedDataWithOp.OP_DELETE
         return True
 
-    def __cleanup_nbr_cache(self, vrf, nbr):
-        nbr_key = ExtConfigDBConnector.get_table_key('BGP_NEIGHBOR',
+    def __cleanup_nbr_cache(self, vrf, nbr, is_peer_grp=False):
+        tbl, af_tbl = ('BGP_PEER_GROUP', 'BGP_PEER_GROUP_AF') if is_peer_grp else ('BGP_NEIGHBOR', 'BGP_NEIGHBOR_AF')
+        nbr_key = ExtConfigDBConnector.get_table_key(tbl,
                                             self.config_db.serialize_key((vrf, nbr)))
         self.table_data_cache.pop(nbr_key, None)
         for af in ['ipv4', 'ipv6']:
-            nbr_af_key = ExtConfigDBConnector.get_table_key('BGP_NEIGHBOR_AF',
+            nbr_af_key = ExtConfigDBConnector.get_table_key(af_tbl,
                                                 self.config_db.serialize_key((vrf, nbr, af + '_unicast')))
             self.table_data_cache.pop(nbr_af_key, None)
 
@@ -2901,7 +2903,7 @@ class BGPConfigDaemon:
                         peer_grp.ref_nbrs.remove(peer)
             if not self.__peer_is_ip(peer) and vrf in self.bgp_intf_nbr and peer in self.bgp_intf_nbr[vrf]:
                 self.bgp_intf_nbr[vrf].remove(peer)
-        self.__cleanup_nbr_cache(vrf, peer)
+        self.__cleanup_nbr_cache(vrf, peer, is_peer_grp)
         for dkey, dval in data.items():
             # bypass cache update because cache entry was removed
             dval.status = CachedDataWithOp.STAT_SUCC
