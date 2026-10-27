@@ -47,6 +47,13 @@ start()
         # Restore dynamic configuration if it exists
         mv ${WD}/${DYNAMIC_CONFIG_FILE_TEMPLATE} ${CONFIG_DIR} 2>/dev/null || true
 
+        # Search domains and resolver options have no nameserver of their own;
+        # resolvconf merges them with what DHCP supplied.
+        dns_options_cfg=$(redis-dump -d 4 -k "DNS_OPTIONS*" -y)
+        if [[ $? -eq 0 && ${dns_options_cfg} != "{}" ]]; then
+            sonic-cfggen -d -t /usr/share/sonic/templates/resolv.conf.j2,${STATIC_CONFIG_FILE}
+        fi
+
         /sbin/resolvconf --enable-updates
         /sbin/resolvconf -u
     fi
