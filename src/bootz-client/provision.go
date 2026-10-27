@@ -407,6 +407,14 @@ func (bc *BootzContext) handleResponse(ctx context.Context,
 		}
 	} else {
 		bc.ReportInfoStatus("Completed processing all bootstrap data")
+		// Provision mode reboots on success, so the SUCCESS report has to
+		// come from the next boot, as it does after an image install.
+		if !bc.imageInstalled && cfg.ImageFile == "" && !cfg.SkipReboot {
+			if err := savePendingReport(cfg, bc.chassis); err != nil {
+				slog.Error("failed to save pending status report", "err", err)
+				bc.ReportInfoStatus("Final status will not be reported after reboot: %v", err)
+			}
+		}
 	}
 	return nil
 }
