@@ -720,6 +720,66 @@ def test_neighbor_addpath_tx_best_selected(run_cmd):
     hdlr['BGP_PEER_GROUP_AF']('BGP_PEER_GROUP_AF', 'default|PG1|ipv6_unicast', {'tx_add_best_path_count': '4'})
     assert neighbor_cmds(run_cmd, 'addpath') == ['neighbor PG1 addpath-tx-best-selected 4']
 
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_neighbor_graceful_restart(run_cmd):
+    """graceful_restart_enable turns graceful restart on for a neighbor or a
+    peer-group; false or its removal returns it to the global setting."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+
+    run_cmd.reset_mock()
+    hdlr['BGP_PEER_GROUP']('BGP_PEER_GROUP', 'default|PG1', {'asn': '300', 'graceful_restart_enable': 'true'})
+    assert neighbor_cmds(run_cmd, 'graceful-restart') == ['neighbor PG1 graceful-restart']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_PEER_GROUP']('BGP_PEER_GROUP', 'default|PG1', {'asn': '300', 'graceful_restart_enable': 'false'})
+    assert neighbor_cmds(run_cmd, 'graceful-restart') == ['no neighbor PG1 graceful-restart']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR']('BGP_NEIGHBOR', 'default|10.0.0.1', {'asn': '200', 'graceful_restart_enable': 'true'})
+    assert neighbor_cmds(run_cmd, 'graceful-restart') == ['neighbor 10.0.0.1 graceful-restart']
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_neighbor_password(run_cmd):
+    """auth_password holds the password itself, which FRR takes as
+    "neighbor X password <password>"."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+
+    run_cmd.reset_mock()
+    hdlr['BGP_PEER_GROUP']('BGP_PEER_GROUP', 'default|PG1', {'asn': '300', 'auth_password': 's3cret'})
+    assert neighbor_cmds(run_cmd, 'password') == ['neighbor PG1 password s3cret']
+
+    run_cmd.reset_mock()
+    hdlr['BGP_NEIGHBOR']('BGP_NEIGHBOR', 'default|10.0.0.1', {'asn': '200', 'auth_password': 's3cret'})
+    assert neighbor_cmds(run_cmd, 'password') == ['neighbor 10.0.0.1 password s3cret']
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_peer_group_recreated_after_delete(run_cmd):
+    """Deleting a peer-group forgets its fields, so creating it again with the
+    same fields renders them again."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    daemon.config_db.serialize_key.side_effect = (
+        lambda key: '|'.join(key) if isinstance(key, tuple) else key)
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['BGP_GLOBALS']('BGP_GLOBALS', 'default', {'local_asn': '100'})
+
+    for _ in range(2):
+        run_cmd.reset_mock()
+        hdlr['BGP_PEER_GROUP']('BGP_PEER_GROUP', 'default|PG1', {'peer_type': 'internal', 'tcp_mss': '1300'})
+        assert neighbor_cmds(run_cmd, 'remote-as') == ['neighbor PG1 remote-as internal']
+        assert neighbor_cmds(run_cmd, 'tcp-mss') == ['neighbor PG1 tcp-mss 1300']
+        hdlr['BGP_PEER_GROUP']('BGP_PEER_GROUP', 'default|PG1', None)
+    assert not any(k.startswith('BGP_PEER_GROUP') for k in daemon.table_data_cache)
+
 def aggregate_cmds(run_cmd):
     """The aggregate-address commands issued, with the spaces optional arguments
     leave collapsed."""
