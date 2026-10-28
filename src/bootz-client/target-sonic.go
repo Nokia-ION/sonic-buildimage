@@ -15,8 +15,9 @@ const (
 	PlatformName = "SONiC"
 
 	// Sonic cert definitions
-	SonicIDevIDLeafCertIndex  = 0x01C90001         // IDevID Leaf cert NV Index
-	SonicIDevIDInterCertIndex = 0x01C90100         // IDevID intermediate cert NV index
+	SonicIDevIDLeafCertIndex  = 0x01C90000         // IDevID Leaf cert NV Index
+	SonicIDevIDInterCertIndex = 0                  // No intermediate cert in the TPM
+	SonicIDevIDKeyHandle      = 0x81820000         // Persistent IDevID key handle
 	SonicCertPath             = "/etc/certs"       // IDevid cert file directory
 	SonicIDevIDLeafCertFile   = "idevid-chain.crt" // IDevID Leaf cert file
 	SonicIDevIDInterCertFile  = ""                 // IDevID intermediate cert file
