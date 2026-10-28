@@ -1957,7 +1957,7 @@ class BGPConfigDaemon:
                          ('match_ipv6_prefix_set',          '{no:no-prefix}match ipv6 address prefix-list {}'),
                          ('match_neighbor',                 '[bgpd]{no:no-prefix}match peer {:peer-ip}'),
                          ('match_tag',                      '{no:no-prefix}match tag {}'),
-                         ('match_protocol',                 '[zebra]{no:no-prefix}match source-protocol {:src-proto}'),
+                         ('match_protocol',                 '[bgpd]{no:no-prefix}match source-protocol {:src-proto}'),
                          ('match_next_hop_set|ipv4',        '{no:no-prefix}match ip next-hop prefix-list {}'),
                          ('match_next_hop_set|ipv6',        '{no:no-prefix}match ip next-hop prefix-list {}'), #match ipv6 next-hop prefix-list not suppported by frr
                          ('match_med',                      '{no:no-prefix}match metric {}'),
