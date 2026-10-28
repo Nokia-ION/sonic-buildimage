@@ -344,22 +344,8 @@ func ResolveAndSignNonce(idevidPriv *rsa.PrivateKey, nonceHex string) ([]byte, e
 	}
 	defer tpm.Close()
 
-	// Load the context from the binary file
-	ctxPath := IDevIdContextPath
-	keyHandle, err := readContext(tpm, ctxPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load IDevID context from %s: %w", ctxPath, err)
-	}
-
-	// Flush the transient handle to prevent TPM memory exhaustion.
-	defer func() {
-		if _, err := (tpm2.FlushContext{FlushHandle: keyHandle}).Execute(tpm); err != nil {
-			slog.Warn("failed to flush IDevID handle from TPM",
-				"handle", fmt.Sprintf("0x%08X", keyHandle), "err", err)
-		}
-	}()
-
-	slog.Info("IDevID handle loaded successfully", "handle", fmt.Sprintf("0x%08X", keyHandle))
+	keyHandle := tpm2.TPMHandle(SonicIDevIDKeyHandle)
+	slog.Info("using persistent IDevID key", "handle", fmt.Sprintf("0x%08X", keyHandle))
 
 	// Sign the hex string bytes using the P-384 TPM logic
 	signedNonce, err := signNonceChallenge(tpm, keyHandle, []byte(nonceHex))
