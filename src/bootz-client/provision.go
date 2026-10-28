@@ -325,6 +325,41 @@ func stageVendorConfig(config []byte) error {
 	return nil
 }
 
+// PendingTelemetryDir is where the new image's first boot (config-setup
+// do_config_migration) restores /etc/sonic/telemetry from.
+const PendingTelemetryDir = "/host/old_config/telemetry"
+
+// stageTelemetryDir carries the gNMI certificate directory over to the new
+// image. The Bootz certz profiles are installed after the migration, so they
+// replace carried-over files of the same name.
+func stageTelemetryDir() error {
+	fi, err := os.Stat(telemetryCertDir)
+	if os.IsNotExist(err) {
+		slog.Info("no telemetry certificates to carry over", "path", telemetryCertDir)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", telemetryCertDir)
+	}
+	if err := os.RemoveAll(PendingTelemetryDir); err != nil {
+		return fmt.Errorf("remove %s: %w", PendingTelemetryDir, err)
+	}
+	if err := os.MkdirAll(PendingTelemetryDir, fi.Mode().Perm()); err != nil {
+		return fmt.Errorf("create %s: %w", PendingTelemetryDir, err)
+	}
+	// cp -a keeps the key file modes and the Certz symlinks.
+	out, err := exec.Command("cp", "-a", telemetryCertDir+"/.", PendingTelemetryDir).CombinedOutput()
+	if err != nil {
+		os.RemoveAll(PendingTelemetryDir)
+		return fmt.Errorf("copy %s to %s: %w (output: %s)", telemetryCertDir, PendingTelemetryDir, err, out)
+	}
+	slog.Info("staged telemetry certificates for the new image", "path", PendingTelemetryDir)
+	return nil
+}
+
 // buildBootstrapRequest constructs the GetBootstrapDataRequest message.
 // It bundles the chassis-specific hardware identity, the current state of the
 // active control card, and a cryptographically random nonce.
