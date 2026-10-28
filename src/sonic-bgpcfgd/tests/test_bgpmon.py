@@ -1070,6 +1070,34 @@ def test_route_map_next_hop_set_clauses(clause, fields):
     assert bgpmon.bgpmon.parse_route_map_set(clause) == fields
 
 
+
+# The match clauses as FRR renders them, and the CONFIG_DB fields they come from.
+@pytest.mark.parametrize("clause,field", [
+    ("as-path AS-SET-A", ("match_as_path", "AS-SET-A")),
+    ("interface Ethernet0", ("match_interface", "Ethernet0")),
+])
+def test_route_map_match_clauses(clause, field):
+    assert bgpmon.bgpmon.parse_route_map_match(clause) == field
+
+
+def test_route_map_rule_ext_community_call_and_source_protocol(bgp_mon):
+    """Route targets and sites of origin join in the CONFIG_DB spelling, the
+    called route-map and the source protocol are published, and only bgpd's
+    view is read."""
+    rule = {"sequenceNumber": 10, "type": "permit", "matchClauses": ["as-path AS-SET-A", "source-protocol bgp"],
+            "setClauses": ["extcommunity rt 1:1 2:2", "extcommunity soo 3:3"], "callClause": "RM-CALLED"}
+    zebra_rule = {"sequenceNumber": 10, "type": "permit", "matchClauses": ["source-protocol bgp"], "setClauses": []}
+    output = json.dumps({"bgpd": {"RM1": {"invoked": 0, "rules": [rule]}},
+                         "zebra": {"RM2": {"rules": [zebra_rule]}}})
+    with patch("bgpmon.bgpmon.getstatusoutput_noshell", return_value=(0, output)):
+        assert bgp_mon.get_all_route_map_states()
+    fields = bgp_mon.new_route_map_state[("RM1", "10")]
+    assert fields["set_ext_community_inline"] == "route-target:1:1,route-target:2:2,route-origin:3:3"
+    assert fields["call_route_map"] == "RM-CALLED"
+    assert fields["match_as_path"] == "AS-SET-A"
+    assert fields["match_protocol"] == "bgp"
+    assert ("RM2", "10") not in bgp_mon.new_route_map_state
+
 # A bgpd running configuration in the shape FRR writes it, with an aggregate
 # in each family of the default instance and one in a named VRF.
 AGGREGATE_CONFIG = """Building configuration...
