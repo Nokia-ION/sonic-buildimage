@@ -558,6 +558,17 @@ route_map_set_next_hop_ip_data = [
                    [conf_cmd, 'route-map RM_NHA permit 10', '{}set ip next-hop 10.10.10.1']),
 ]
 
+# FRR's zebra vty has no source-protocol match, so the clause goes to bgpd.
+route_map_match_protocol_data = [
+    CmdMapTestInfo('ROUTE_MAP', 'RM_SP|10', {'route_operation': 'permit'},
+                   [conf_cmd, 'route-map RM_SP permit 10'], no_del=True, ignore_tail=None),
+    CmdMapTestInfo('ROUTE_MAP', 'RM_SP|10', {'match_protocol': 'bgp'},
+                   [conf_cmd, 'route-map RM_SP permit 10', '{}match source-protocol bgp'], daemons=['bgpd']),
+]
+
+def test_route_map_match_protocol():
+    data_set_del_test(route_map_match_protocol_data)
+
 def test_route_map_set_next_hop_self():
     data_set_del_test(route_map_set_next_hop_self_data)
 
