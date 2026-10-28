@@ -187,7 +187,9 @@ def parse_route_map_match(clause):
         return ("match_ipv6_prefix_set", parts[3])
     if len(parts) == 2:
         simple = {"metric": "match_med", "origin": "match_origin",
-                  "community": "match_community", "extcommunity": "match_ext_community"}
+                  "community": "match_community", "extcommunity": "match_ext_community",
+                  "as-path": "match_as_path", "interface": "match_interface",
+                  "source-protocol": "match_protocol"}
         if parts[0] in simple:
             return (simple[parts[0]], parts[1])
         if parts[0] == "local-preference":
@@ -234,7 +236,15 @@ def parse_route_map_set(clause):
         # Stored the way CONFIG_DB stores it, marker included: the additive
         # marker is how the ADD option is carried, there being no field for it.
         return {"set_community_inline": " ".join(parts[1:])}
+    if parts[0] == "extcommunity" and len(parts) >= 3 and parts[1] in EXT_COMMUNITY_MARKS:
+        # FRR renders route targets and sites of origin as separate clauses;
+        # route_map_rule_fields joins them in the CONFIG_DB spelling.
+        return {"set_ext_community_inline": ",".join(EXT_COMMUNITY_MARKS[parts[1]] + c for c in parts[2:])}
     return {}
+
+
+# FRR's extcommunity kinds and the prefix CONFIG_DB spells their members with.
+EXT_COMMUNITY_MARKS = {"rt": "route-target:", "soo": "route-origin:"}
 
 
 def route_map_rule_fields(rule):
@@ -245,7 +255,12 @@ def route_map_rule_fields(rule):
         if parsed:
             fields[parsed[0]] = parsed[1]
     for clause in rule.get("setClauses", []):
-        fields.update(parse_route_map_set(clause))
+        for fld, val in parse_route_map_set(clause).items():
+            if fld == "set_ext_community_inline" and fields.get(fld):
+                val = fields[fld] + "," + val
+            fields[fld] = val
+    if rule.get("callClause"):
+        fields["call_route_map"] = rule["callClause"]
     # No OpenConfig leaf can carry these yet, but they cost nothing to publish
     # and they are the only genuinely operational thing FRR reports here.
     fields["invoked"] = str(rule.get("invoked", 0))
