@@ -822,6 +822,23 @@ def test_route_map_tag(run_cmd):
     hdlr['TAG_SET']('TAG_SET', 'TS1', {'tag_value': ['400', '500']})
     assert neighbor_cmds(run_cmd, 'match tag') == []
 
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_static_route_bfd(run_cmd):
+    """STATIC_ROUTE bfd, one element per next-hop, adds "bfd" to the route
+    line of each next-hop it is true for, and turning it on replaces the line."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+
+    run_cmd.reset_mock()
+    hdlr['STATIC_ROUTE']('STATIC_ROUTE', 'default|10.61.0.0/16', {'nexthop': '10.0.0.1,10.0.0.2', 'bfd': 'true,false'})
+    assert sorted(neighbor_cmds(run_cmd, 'ip route')) == ['ip route 10.61.0.0/16 10.0.0.1 bfd', 'ip route 10.61.0.0/16 10.0.0.2']
+
+    run_cmd.reset_mock()
+    hdlr['STATIC_ROUTE']('STATIC_ROUTE', 'default|10.61.0.0/16', {'nexthop': '10.0.0.1,10.0.0.2', 'bfd': 'true,true'})
+    assert neighbor_cmds(run_cmd, 'ip route') == ['no ip route 10.61.0.0/16 10.0.0.2', 'ip route 10.61.0.0/16 10.0.0.2 bfd']
+
 def aggregate_cmds(run_cmd):
     """The aggregate-address commands issued, with the spaces optional arguments
     leave collapsed."""

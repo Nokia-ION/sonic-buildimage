@@ -136,6 +136,13 @@ module sonic-static-route {
           description
             "blackhole refers to a route that, if matched, discards the message silently.";
         }
+        leaf bfd {
+          type string {
+            pattern "((true|false),)*(true|false)";
+          }
+          default "false";
+          description "Enable BFD monitoring for each nexthop, comma-separated per nexthop.";
+        }
       } /* end of list STATIC_ROUTE_LIST */
     } /* end of container STATIC_ROUTE */
   } /* end of container sonic-static_route */
