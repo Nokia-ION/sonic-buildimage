@@ -1065,6 +1065,7 @@ def test_peer_group_removed_group_loses_its_rows(bgp_mon):
     ("ip next-hop peer-address", {"set_next_hop": "self"}),
     ("ipv6 next-hop global 2001:db8::1", {"set_ipv6_next_hop_global": "2001:db8::1"}),
     ("ipv6 next-hop prefer-global", {"set_ipv6_next_hop_prefer_global": "true"}),
+    ("tag 77", {"set_tag": "77"}),
 ])
 def test_route_map_next_hop_set_clauses(clause, fields):
     assert bgpmon.bgpmon.parse_route_map_set(clause) == fields
@@ -1075,6 +1076,7 @@ def test_route_map_next_hop_set_clauses(clause, fields):
 @pytest.mark.parametrize("clause,field", [
     ("as-path AS-SET-A", ("match_as_path", "AS-SET-A")),
     ("interface Ethernet0", ("match_interface", "Ethernet0")),
+    ("tag 100", ("match_tag", "100")),
 ])
 def test_route_map_match_clauses(clause, field):
     assert bgpmon.bgpmon.parse_route_map_match(clause) == field
