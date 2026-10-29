@@ -961,6 +961,8 @@ class CommandArgument(object):
         elif format == 'nh-tag':
             if len(self.value) > 0:
                 self.value = 'tag %s' % self.to_str()
+        elif format == 'nh-bfd':
+            self.value = 'bfd' if self.value == 'true' else ''
         elif format == 'nh-vrf':
             if len(self.value) > 0:
                 self.value = 'nexthop-vrf %s' % self.to_str()
@@ -1467,7 +1469,8 @@ def hdl_static_route(daemon, cmd_str, op, st_idx, args, data):
         tag_list = arg_list(args[6])
         dist_list = arg_list(args[7])
         nh_vrf_list = arg_list(args[8])
-        ip_nh_set = IpNextHopSet(af, bkh_list, nh_list, track_list, intf_list, tag_list, dist_list, nh_vrf_list)
+        bfd_list = arg_list(args[9]) if len(args) > 9 else None
+        ip_nh_set = IpNextHopSet(af, bkh_list, nh_list, track_list, intf_list, tag_list, dist_list, nh_vrf_list, bfd_list)
     cur_nh_set = daemon.static_route_list.get(vrf, {}).get(ip_prefix, IpNextHopSet(af))
     diff_set = ip_nh_set.symmetric_difference(cur_nh_set)
     op_cmd_list = {}
@@ -1739,9 +1742,10 @@ class AggregateAddr:
         self.summary_only = False
 
 class IpNextHop:
-    def __init__(self, af_id, blackhole, dst_ip, track, if_name, tag, dist, vrf):
+    def __init__(self, af_id, blackhole, dst_ip, track, if_name, tag, dist, vrf, bfd = None):
         zero_ip = lambda af: '0.0.0.0' if af == socket.AF_INET else '::'
         self.af = af_id
+        self.bfd = 'true' if bfd == 'true' else 'false'
         self.blackhole = 'false' if blackhole is None or blackhole == '' else blackhole
         self.distance = 0 if dist is None else int(dist)
         self.track = 0 if track is None else int(track)
@@ -1759,16 +1763,15 @@ class IpNextHop:
     def __eq__(self, other):
         return (self.af == other.af and self.blackhole == other.blackhole and
                 self.ip == other.ip and self.track == other.track and self.interface == other.interface and
-                self.tag == other.tag and self.distance == other.distance and self.nh_vrf == other.nh_vrf)
+                self.tag == other.tag and self.distance == other.distance and self.nh_vrf == other.nh_vrf and
+                self.bfd == other.bfd)
     def __ne__(self, other):
-        return (self.af != other.af or self.blackhole != other.blackhole or
-                self.ip != other.ip or self.track != other.track or self.interface != other.interface or
-                self.tag != other.tag or self.distance != other.distance or self.nh_vrf != other.nh_vrf)
+        return not self.__eq__(other)
     def __hash__(self):
-        return hash((self.af, self.blackhole, self.ip, self.track, self.interface, self.tag, self.distance, self.nh_vrf))
+        return hash((self.af, self.blackhole, self.ip, self.track, self.interface, self.tag, self.distance, self.nh_vrf, self.bfd))
     def __str__(self):
-        return 'AF %d BKH %s IP %s TRACK %d INTF %s TAG %d DIST %d VRF %s' % (
-                self.af, self.blackhole, self.ip, self.track, self.interface, self.tag, self.distance, self.nh_vrf)
+        return 'AF %d BKH %s IP %s TRACK %d INTF %s TAG %d DIST %d VRF %s BFD %s' % (
+                self.af, self.blackhole, self.ip, self.track, self.interface, self.tag, self.distance, self.nh_vrf, self.bfd)
     def is_ip_valid(self):
         socket.inet_pton(self.af, self.ip)
     def is_zero_ip(self):
@@ -1782,18 +1785,18 @@ class IpNextHop:
         arg = lambda x: '' if x is None else x
         num_arg = lambda x: '' if x is None or x == 0 else str(x)
         ip_arg = lambda : '' if self.ip is None else ('' if self.is_zero_ip() else self.ip)
-        return [self.blackhole, ip_arg(), arg(self.interface), num_arg(self.track), num_arg(self.tag), num_arg(self.distance), arg(self.nh_vrf)]
+        return [self.blackhole, ip_arg(), arg(self.interface), num_arg(self.track), num_arg(self.tag), num_arg(self.distance), arg(self.nh_vrf), self.bfd]
 
 class IpNextHopSet(set):
-    def __init__(self, af, bkh_list = None, ip_list = None, track_list = None, intf_list = None, tag_list = None, dist_list = None, vrf_list = None):
+    def __init__(self, af, bkh_list = None, ip_list = None, track_list = None, intf_list = None, tag_list = None, dist_list = None, vrf_list = None, bfd_list = None):
         super(IpNextHopSet, self).__init__()
         if bkh_list is None and ip_list is None and intf_list is None:
             # empty set, for delete case
             return
-        nums = {len(x) for x in [bkh_list, ip_list, track_list, intf_list, tag_list, dist_list, vrf_list] if x is not None}
+        nums = {len(x) for x in [bkh_list, ip_list, track_list, intf_list, tag_list, dist_list, vrf_list, bfd_list] if x is not None}
         if len(nums) != 1:
             syslog.syslog(syslog.LOG_ERR, 'Lists of next-hop attribute have different sizes: %s' % nums)
-            for x in [bkh_list, ip_list, track_list, intf_list, tag_list, dist_list, vrf_list]:
+            for x in [bkh_list, ip_list, track_list, intf_list, tag_list, dist_list, vrf_list, bfd_list]:
                 syslog.syslog(syslog.LOG_DEBUG, 'List: %s' % x)
             return
         nh_cnt = nums.pop()
@@ -1801,7 +1804,7 @@ class IpNextHopSet(set):
         for idx in range(nh_cnt):
             try:
                 self.add(IpNextHop(af, item(bkh_list, idx), item(ip_list, idx), item(track_list, idx), item(intf_list, idx),
-                                   item(tag_list, idx), item(dist_list, idx), item(vrf_list, idx), ))
+                                   item(tag_list, idx), item(dist_list, idx), item(vrf_list, idx), item(bfd_list, idx)))
             except ValueError:
                 continue
     @staticmethod
@@ -2097,10 +2100,10 @@ class BGPConfigDaemon:
                              ('retransmission-interval', '{}ip ospf retransmit-interval {} {}', handle_ospf_if_common),
                              ('transmit-delay', '{}ip ospf transmit-delay {} {}', handle_ospf_if_common),
                            ]
-    static_route_map = [(['ip_prefix|ipv4', '++blackhole', '++nexthop', '++ifname', '++track', '++tag', '++distance', '++nexthop-vrf'],
-                         '{no:no-prefix}ip route {} {:blackhole} {} {} {:track} {:nh-tag} {} {:nh-vrf}', hdl_static_route, socket.AF_INET),
-                        (['ip_prefix|ipv6', '++blackhole', '++nexthop', '++ifname', '++track', '++tag', '++distance', '++nexthop-vrf'],
-                         '{no:no-prefix}ipv6 route {} {:blackhole} {} {} {:track} {:nh-tag} {} {:nh-vrf} ', hdl_static_route, socket.AF_INET6)]
+    static_route_map = [(['ip_prefix|ipv4', '++blackhole', '++nexthop', '++ifname', '++track', '++tag', '++distance', '++nexthop-vrf', '++bfd'],
+                         '{no:no-prefix}ip route {} {:blackhole} {} {} {:track} {:nh-tag} {} {:nh-vrf} {:nh-bfd}', hdl_static_route, socket.AF_INET),
+                        (['ip_prefix|ipv6', '++blackhole', '++nexthop', '++ifname', '++track', '++tag', '++distance', '++nexthop-vrf', '++bfd'],
+                         '{no:no-prefix}ipv6 route {} {:blackhole} {} {} {:track} {:nh-tag} {} {:nh-vrf} {:nh-bfd} ', hdl_static_route, socket.AF_INET6)]
     pim_interface_key_map = [('mode', '{no:no-prefix}ip pim', ['sm','']),
                              ('dr-priority', '{no:no-prefix}ip pim drpriority {}'),
                              ('hello-interval', '{no:no-prefix}ip pim hello {:pim_hello_parms}',
@@ -2387,7 +2390,7 @@ class BGPConfigDaemon:
             self.__update_cache_data(table_key, data1)
 
     def __init__(self):
-        self.config_db = ExtConfigDBConnector({'STATIC_ROUTE': {'nexthop', 'ifname', 'distance', 'nexthop-vrf', 'blackhole', 'track'}})
+        self.config_db = ExtConfigDBConnector({'STATIC_ROUTE': {'nexthop', 'ifname', 'distance', 'nexthop-vrf', 'blackhole', 'track', 'bfd'}})
         try:
             self.config_db.connect()
         except Exception as e:
@@ -2534,7 +2537,7 @@ class BGPConfigDaemon:
             self.static_route_list.setdefault(vrf, {})[ip_prefix] = IpNextHopSet(af,
                                         nh_attr('blackhole'), nh_attr('nexthop'),nh_attr('track'),
                                         nh_attr('ifname'), nh_attr('tag'), nh_attr('distance'),
-                                        nh_attr('nexthop-vrf'))
+                                        nh_attr('nexthop-vrf'), nh_attr('bfd'))
 
         self.table_handler_list = [
             ('VRF', self.vrf_handler),

@@ -285,7 +285,7 @@ def test_ip_nexthop():
         assert(nh.distance == 0)
         assert(nh.nh_vrf == '')
         arg_list = nh.get_arg_list()
-        assert(arg_list == ['false', '', 'Loopback0'] + [''] * 4)
+        assert(arg_list == ['false', '', 'Loopback0'] + [''] * 4 + ['false'])
         nh = IpNextHop(af, 'true', '1.1.1.1' if af == socket.AF_INET else '1::1',
                        1, 'Ethernet0', 100, 2, 'default')
         assert(nh.blackhole == 'true')
@@ -296,7 +296,7 @@ def test_ip_nexthop():
         assert(nh.distance == 2)
         assert(nh.nh_vrf == '')
         arg_list = nh.get_arg_list()
-        assert(arg_list == ['true', '', '', '1', '100', '2', ''])
+        assert(arg_list == ['true', '', '', '1', '100', '2', '', 'false'])
     nh = IpNextHop(socket.AF_INET, 'false', '1.2.3.4', 5, 'Ethernet1', 2345, 3, 'Vrf_red')
     assert(nh.af == socket.AF_INET)
     assert(nh.blackhole == 'false')
@@ -307,7 +307,7 @@ def test_ip_nexthop():
     assert(nh.distance == 3)
     assert(nh.nh_vrf == 'Vrf_red')
     arg_list = nh.get_arg_list()
-    assert(arg_list == ['false', '1.2.3.4', 'Ethernet1', '5', '2345', '3', 'Vrf_red'])
+    assert(arg_list == ['false', '1.2.3.4', 'Ethernet1', '5', '2345', '3', 'Vrf_red', 'false'])
     nh = IpNextHop(socket.AF_INET6, 'false', '1001:1::2002', 6, 'Ethernet2', 9000, 4, 'Vrf_blue')
     assert(nh.af == socket.AF_INET6)
     assert(nh.blackhole == 'false')
@@ -318,7 +318,7 @@ def test_ip_nexthop():
     assert(nh.distance == 4)
     assert(nh.nh_vrf == 'Vrf_blue')
     arg_list = nh.get_arg_list()
-    assert(arg_list == ['false', '1001:1::2002', 'Ethernet2', '6', '9000', '4', 'Vrf_blue'])
+    assert(arg_list == ['false', '1001:1::2002', 'Ethernet2', '6', '9000', '4', 'Vrf_blue', 'false'])
 
 def test_nexthop_set():
     for af in [socket.AF_INET, socket.AF_INET6]:
