@@ -189,7 +189,7 @@ def parse_route_map_match(clause):
         simple = {"metric": "match_med", "origin": "match_origin",
                   "community": "match_community", "extcommunity": "match_ext_community",
                   "as-path": "match_as_path", "interface": "match_interface",
-                  "source-protocol": "match_protocol"}
+                  "source-protocol": "match_protocol", "tag": "match_tag"}
         if parts[0] in simple:
             return (simple[parts[0]], parts[1])
         if parts[0] == "local-preference":
@@ -212,6 +212,8 @@ def parse_route_map_set(clause):
         return {"set_origin": parts[1]}
     if parts[0] == "local-preference" and len(parts) == 2:
         return {"set_local_pref": parts[1]}
+    if parts[0] == "tag" and len(parts) == 2:
+        return {"set_tag": parts[1]}
     if parts[0] == "ip" and len(parts) == 3 and parts[1] == "next-hop":
         # CONFIG_DB spells the self next-hop 'self', which frrcfgd renders as
         # FRR's peer-address.
