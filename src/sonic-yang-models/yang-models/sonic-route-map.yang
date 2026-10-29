@@ -223,12 +223,10 @@ module sonic-route-map {
                     max-elements 1;
                 }
 
-                leaf-list match_tag {
-                    type uint32;
-                    ordered-by user;
+                leaf match_tag {
+                    type string;
                     description
-                        "Value of the tag match member";
-                    max-elements 1;
+                        "Tag to match: a tag value, or the name of a TAG_SET holding one";
                 }
 
                 leaf match_med{

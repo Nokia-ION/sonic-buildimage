@@ -238,5 +238,22 @@ module sonic-routing-policy-sets {
                 }
             }
         }
+
+        container TAG_SET {
+
+            list TAG_SET_LIST {
+                key "name";
+
+                leaf name {
+                    type string;
+                    description "Tag set name";
+                }
+
+                leaf-list tag_value {
+                    type uint32;
+                    description "Tag values of the set";
+                }
+            }
+        }
     }
 }
