@@ -105,10 +105,6 @@
     },
     "BGP_AS_PATH_VALID": {
         "desc": "Configure BGP AS path table."
-    },
-    "ROUTE_MAP_MATCH_TAG_MUST_COND_FALSE": {
-        "desc": "Configure route map table with more than one match tag in list.",
-        "eStr": "Too many match_tag elements"
     }
 
 }

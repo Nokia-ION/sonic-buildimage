@@ -424,6 +424,22 @@ def get_command_cmn(daemon, cmd_str, op, st_idx, vals, bool_values):
     return [cmd_str.format(*cmd_args, no = CommandArgument(daemon, cmd_enable))]
 
 
+def hdl_match_tag(daemon, cmd_str, op, st_idx, args, data):
+    """match_tag holds a tag value or the name of a TAG_SET holding one; FRR
+    matches one tag per route-map entry, so a set of any other size is not
+    rendered."""
+    tag = args[0][0] if type(args[0]) is list and len(args[0]) > 0 else args[0]
+    tag = str(tag).strip()
+    if not tag.isdigit():
+        tag_set = daemon.tag_set_list.get(tag)
+        if tag_set is None or len(tag_set) != 1:
+            if op == CachedDataWithOp.OP_DELETE:
+                return [cmd_str.format(CommandArgument(daemon, False, ''), no = CommandArgument(daemon, False))]
+            syslog.syslog(syslog.LOG_ERR, 'tag set %s not found or not holding exactly one tag' % tag)
+            return None
+        tag = next(iter(tag_set))
+    return get_command_cmn(daemon, cmd_str, op, st_idx, (tag,), None)
+
 def hdl_set_extcomm(daemon, cmd_str, op, st_idx, args, is_inline):
     if is_inline:
         if type(args[0]) is list:
@@ -1956,7 +1972,7 @@ class BGPConfigDaemon:
                          ('match_prefix_set|ipv6',          '{no:no-prefix}match ipv6 address prefix-list {}'),
                          ('match_ipv6_prefix_set',          '{no:no-prefix}match ipv6 address prefix-list {}'),
                          ('match_neighbor',                 '[bgpd]{no:no-prefix}match peer {:peer-ip}'),
-                         ('match_tag',                      '{no:no-prefix}match tag {}'),
+                         ('match_tag',                      '{no:no-prefix}match tag {}', hdl_match_tag),
                          ('match_protocol',                 '[bgpd]{no:no-prefix}match source-protocol {:src-proto}'),
                          ('match_next_hop_set|ipv4',        '{no:no-prefix}match ip next-hop prefix-list {}'),
                          ('match_next_hop_set|ipv6',        '{no:no-prefix}match ip next-hop prefix-list {}'), #match ipv6 next-hop prefix-list not suppported by frr
@@ -1980,7 +1996,8 @@ class BGPConfigDaemon:
                          ('set_community_inline',           '[bgpd]{no:no-prefix}set community {}'),
                          ('set_community_ref',              '[bgpd]{no:no-prefix}set community {:com-ref}'),
                          ('set_ext_community_inline',       '[bgpd]{no:no-prefix}set extcommunity {:ext-com-list}', hdl_set_extcomm, True),
-                         ('set_ext_community_ref',          '[bgpd]{no:no-prefix}set extcommunity {:ext-com-ref}', hdl_set_extcomm, False)
+                         ('set_ext_community_ref',          '[bgpd]{no:no-prefix}set extcommunity {:ext-com-ref}', hdl_set_extcomm, False),
+                         ('set_tag',                        '{no:no-prefix}set tag {}')
     ]
 
     bfd_peer_shop_key_map = [('enabled',                        '{no:no-prefix}shutdown', ['false', 'true']),
@@ -2941,6 +2958,17 @@ class BGPConfigDaemon:
             new_name += '_nexthop'
         return new_name
 
+    def __apply_tag_set_route_maps(self, tag_set_name):
+        """Render again the route-map entries matching tag_set_name, whose
+        match tag is the value the set holds."""
+        for key, data in self.config_db.get_table('ROUTE_MAP').items():
+            tags = data.get('match_tag', [])
+            if type(tags) is not list:
+                tags = [tags]
+            if tag_set_name in tags:
+                self.bgp_message.put((self.config_db.serialize_key(key), False, 'ROUTE_MAP',
+                                      {'match_tag': CachedDataWithOp(tags, CachedDataWithOp.OP_UPDATE)}))
+
     def __apply_dep_vrf_table(self, vrf, table_name, *table_key, **extra_args):
         if len(table_key) > 0:
             new_key = (vrf,) + table_key
@@ -3439,6 +3467,7 @@ class BGPConfigDaemon:
                     self.tag_set_list.pop(tag_set_name, None)
                 for _, dval in data.items():
                     dval.status = CachedDataWithOp.STAT_SUCC
+                self.__apply_tag_set_route_maps(tag_set_name)
             elif table == 'BGP_GLOBALS_EVPN_VNI':
                 af_type, vni = key.split('|')
                 af, ip_type = af_type.lower().split('_')

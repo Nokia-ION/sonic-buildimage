@@ -791,6 +791,37 @@ def test_peer_group_recreated_after_delete(run_cmd):
         hdlr['BGP_PEER_GROUP']('BGP_PEER_GROUP', 'default|PG1', None)
     assert not any(k.startswith('BGP_PEER_GROUP') for k in daemon.table_data_cache)
 
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_route_map_tag(run_cmd):
+    """set_tag renders as "set tag", and match_tag as "match tag" with a tag
+    value or the one value of the TAG_SET it names, rendered again when the
+    set changes."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    daemon.config_db.serialize_key.side_effect = (
+        lambda key: '|'.join(key) if isinstance(key, tuple) else key)
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+
+    run_cmd.reset_mock()
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RMT|10', {'route_operation': 'permit', 'set_tag': '77', 'match_tag': '100'})
+    assert neighbor_cmds(run_cmd, 'set tag') == ['set tag 77']
+    assert neighbor_cmds(run_cmd, 'match tag') == ['match tag 100']
+
+    hdlr['TAG_SET']('TAG_SET', 'TS1', {'tag_value': ['300']})
+    run_cmd.reset_mock()
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RMT|10', {'route_operation': 'permit', 'set_tag': '77', 'match_tag': 'TS1'})
+    assert neighbor_cmds(run_cmd, 'match tag') == ['match tag 300']
+
+    daemon.config_db.get_table.return_value = {('RMT', '10'): {'route_operation': 'permit', 'match_tag': 'TS1'}}
+    run_cmd.reset_mock()
+    hdlr['TAG_SET']('TAG_SET', 'TS1', {'tag_value': ['400']})
+    assert neighbor_cmds(run_cmd, 'match tag') == ['match tag 400']
+
+    run_cmd.reset_mock()
+    hdlr['TAG_SET']('TAG_SET', 'TS1', {'tag_value': ['400', '500']})
+    assert neighbor_cmds(run_cmd, 'match tag') == []
+
 def aggregate_cmds(run_cmd):
     """The aggregate-address commands issued, with the spaces optional arguments
     leave collapsed."""

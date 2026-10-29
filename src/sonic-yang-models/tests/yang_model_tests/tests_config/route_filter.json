@@ -166,7 +166,7 @@
                     "match_next_hop_set": "nh_set",
                     "match_src_vrf": "default",
                     "match_neighbor": ["PortChannel100"],
-                    "match_tag": [2000],
+                    "match_tag": "2000",
                     "match_med": 100,
                     "match_origin": "STATIC",
                     "match_local_pref": 15,
@@ -303,19 +303,6 @@
                     "name": "map8",
                     "stmt_name": 8,
                     "match_neighbor": ["2.3.4.5", "10.1.1.1"]
-                }
-                ]
-            }
-        }
-    },
-    "ROUTE_MAP_MATCH_TAG_MUST_COND_FALSE": {
-        "sonic-route-map:sonic-route-map":{
-            "sonic-route-map:ROUTE_MAP": {
-                "ROUTE_MAP_LIST": [
-                {
-                    "name": "map9",
-                    "stmt_name": 9,
-                    "match_tag": [100, 200]
                 }
                 ]
             }
