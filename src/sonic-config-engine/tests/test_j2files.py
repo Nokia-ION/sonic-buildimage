@@ -781,6 +781,14 @@ assert config == original, 'Rendering mutated the ConfigDB input'
         self.run_script(argument, output_file=self.output_file)
         self.assertTrue(utils.cmp(os.path.join(self.test_dir, 'sample_output', utils.PYvX_DIR, 'radvd.conf'), self.output_file))
 
+        # VLAN_INTERFACE ipv6_ra_* fields map into radvd interval/lifetime/suppress
+        ra_json = os.path.join(self.test_dir, 'data', 'radv', 'vlan_interface_ra.json')
+        argument = ['-j', ra_json, '-t', template_path]
+        self.run_script(argument, output_file=self.output_file)
+        expected_ra = os.path.join(self.test_dir, 'sample_output', utils.PYvX_DIR, 'radvd-ra-config.conf')
+        if not utils.cmp(expected_ra, self.output_file):
+            self.fail(self.run_diff(expected_ra, self.output_file))
+
     def test_lldp(self):
         lldpd_conf_template = os.path.join(self.test_dir, '..', '..', '..', 'dockers', 'docker-lldp', 'lldpd.conf.j2')
 

@@ -149,6 +149,50 @@ module sonic-vlan {
 					default disable;
 				}
 
+				leaf ipv6_ra_suppress {
+					description "When true, IPv6 router advertisements are not transmitted on this VLAN interface";
+					type stypes:boolean_type;
+					default "false";
+				}
+
+				leaf ipv6_ra_interval {
+					description "Interval between periodic IPv6 router advertisements, in seconds";
+					type uint32;
+					units seconds;
+				}
+
+				leaf ipv6_ra_lifetime {
+					description "Router lifetime advertised in IPv6 router advertisements, in seconds";
+					type uint32;
+					units seconds;
+				}
+
+				leaf ipv6_ra_reachable_time {
+					description "Reachable Time advertised in IPv6 router advertisements (OpenConfig reachable-time), in milliseconds";
+					type uint32 {
+						range "0..3600000";
+					}
+					units milliseconds;
+				}
+
+				leaf ipv6_ra_enable {
+					description "When false, IPv6 router advertisements are not transmitted (OpenConfig enable)";
+					type stypes:boolean_type;
+					default "true";
+				}
+
+				leaf ipv6_ra_managed {
+					description "Advertise the managed address configuration flag in IPv6 RAs (OpenConfig managed)";
+					type stypes:boolean_type;
+					default "false";
+				}
+
+				leaf ipv6_ra_other_config {
+					description "Advertise the other configuration flag in IPv6 RAs (OpenConfig other-config)";
+					type stypes:boolean_type;
+					default "false";
+				}
+
 				leaf static_anycast_gateway {
 					description
 						"Enable/disable static anycast gateway for the vlan interface.
@@ -224,6 +268,33 @@ module sonic-vlan {
 				leaf secondary	{
 					description "Optional field to specify if the prefix is secondary subnet";
 					type boolean;
+				}
+
+				leaf ipv6_ra_prefix_valid_lifetime {
+					description "Valid lifetime for this prefix in IPv6 RAs (OpenConfig valid-lifetime)";
+					type uint32;
+					units seconds;
+				}
+
+				leaf ipv6_ra_prefix_preferred_lifetime {
+					description "Preferred lifetime for this prefix in IPv6 RAs (OpenConfig preferred-lifetime)";
+					type uint32;
+					units seconds;
+				}
+
+				leaf ipv6_ra_prefix_disable_advertisement {
+					description "When true, do not advertise this prefix in IPv6 RAs (OpenConfig disable-advertisement)";
+					type stypes:boolean_type;
+				}
+
+				leaf ipv6_ra_prefix_disable_autoconfig {
+					description "When true, disable SLAAC for this prefix in IPv6 RAs (OpenConfig disable-autoconfiguration)";
+					type stypes:boolean_type;
+				}
+
+				leaf ipv6_ra_prefix_enable_onlink {
+					description "When true, mark this prefix on-link in IPv6 RAs (OpenConfig enable-onlink)";
+					type stypes:boolean_type;
 				}
 			}
 			/* end of VLAN_INTERFACE_IPPREFIX_LIST */
