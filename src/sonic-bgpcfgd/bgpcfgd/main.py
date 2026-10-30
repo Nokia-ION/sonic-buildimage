@@ -22,6 +22,7 @@ from .managers_bbr import BBRMgr, BGP_BBR_TABLE_NAME
 from .managers_bgp import BGPPeerMgrBase
 from .managers_db import BGPDataBaseMgr
 from .managers_intf import InterfaceMgr
+from .managers_ipv6_ra import ZebraIpv6RaMgr
 from .managers_setsrc import ZebraSetSrc
 from .managers_static_rt import StaticRouteMgr
 from .managers_rm import RouteMapMgr
@@ -95,6 +96,9 @@ def do_work():
         InterfaceMgr(common_objs, "CONFIG_DB", swsscommon.CFG_LAG_INTF_TABLE_NAME),
         InterfaceMgr(common_objs, "CONFIG_DB", swsscommon.CFG_VOQ_INBAND_INTERFACE_TABLE_NAME),
         InterfaceMgr(common_objs, "CONFIG_DB", swsscommon.CFG_VLAN_SUB_INTF_TABLE_NAME),
+        ZebraIpv6RaMgr(common_objs, "CONFIG_DB", swsscommon.CFG_INTF_TABLE_NAME),
+        ZebraIpv6RaMgr(common_objs, "CONFIG_DB", swsscommon.CFG_LAG_INTF_TABLE_NAME),
+        ZebraIpv6RaMgr(common_objs, "CONFIG_DB", swsscommon.CFG_VLAN_SUB_INTF_TABLE_NAME),
         # State DB managers
         ZebraSetSrc(common_objs, "STATE_DB", swsscommon.STATE_INTERFACE_TABLE_NAME),
         # Peer Managers
@@ -159,6 +163,10 @@ def do_work():
     runner = Runner(common_objs['cfg_mgr'])
     for mgr in managers:
         runner.add_manager(mgr)
+    for mgr in managers:
+        if isinstance(mgr, ZebraIpv6RaMgr):
+            mgr.sync_all()
+    common_objs['cfg_mgr'].commit()
     runner.run()
 
 

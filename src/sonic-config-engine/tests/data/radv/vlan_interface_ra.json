@@ -1,0 +1,26 @@
+{
+    "VLAN_INTERFACE": {
+        "Vlan100": {
+            "ipv6_ra_suppress": "false",
+            "ipv6_ra_interval": "90",
+            "ipv6_ra_lifetime": "900",
+            "ipv6_ra_reachable_time": "30000"
+        },
+        "Vlan100|2001:db8:1::1/64": {
+            "ipv6_ra_prefix_valid_lifetime": "900",
+            "ipv6_ra_prefix_preferred_lifetime": "600",
+            "ipv6_ra_prefix_enable_onlink": "true",
+            "ipv6_ra_prefix_disable_autoconfig": "true",
+            "ipv6_ra_prefix_disable_advertisement": "true"
+        },
+        "Vlan100|2002:db8:1::1/64": {
+            "ipv6_ra_prefix_disable_advertisement": "true"
+        },
+        "Vlan200": {
+            "ipv6_ra_suppress": "true",
+            "ipv6_ra_interval": "60",
+            "ipv6_ra_lifetime": "180"
+        },
+        "Vlan200|2001:db8:2::1/64": {}
+    }
+}

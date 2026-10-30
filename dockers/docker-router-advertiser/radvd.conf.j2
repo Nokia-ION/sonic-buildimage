@@ -8,6 +8,9 @@
 # See man page for radvd.conf for descriptions of all available options
 #
 
+{# CONFIG_DB: VLAN_INTERFACE|<vlan> interface row — ipv6_ra_enable, ipv6_ra_managed,
+   ipv6_ra_other_config, ipv6_ra_suppress, ipv6_ra_interval, ipv6_ra_lifetime,
+   ipv6_ra_reachable_time. Prefix rows add ipv6_ra_prefix_* on VLAN_INTERFACE|<vlan>|<prefix>. #}
 {# If our configuration has VLAN interfaces... #}
 {% if VLAN_INTERFACE %}
 {% set vlan_list = dict() %}
@@ -17,31 +20,139 @@
 {% set _ = vlan_list.update({name: prefix_list}) %}
 {% endif %}
 {% if prefix | ipv6 %}
-{# If our configuration has VLAN interfaces... #}
 {% set prefix_list = vlan_list.get(name) %}
 {% set _ = prefix_list.append(prefix) %}
 {% set _ = vlan_list.update({name: prefix_list}) %}
 {% endif %}
 {% endfor %}
+{# VLANs with interface-row ipv6_ra_* but no assigned IPv6 yet #}
+{% for name, data in VLAN_INTERFACE.items() %}
+{% if name is string and '|' not in name and data is mapping %}
+{% set has_ra = namespace(found=false) %}
+{% for field, val in data.items() %}
+{% if field is string and field.startswith('ipv6_ra_') and val is not none and val|string|trim != '' %}
+{% set has_ra.found = true %}
+{% endif %}
+{% endfor %}
+{% if has_ra.found and name not in vlan_list %}
+{% set _ = vlan_list.update({name: []}) %}
+{% endif %}
+{% endif %}
+{% endfor %}
+{# IPv6 prefix rows (including RA-only) not covered by pfx_filter alone #}
+{% for key, data in VLAN_INTERFACE.items() %}
+{% set vn = namespace(vlan='', pfx='') %}
+{% if key is string and '|' in key %}
+{% set key_parts = key.split('|', 1) %}
+{% if ':' in key_parts[1] %}
+{% set vn.vlan = key_parts[0] %}
+{% set vn.pfx = key_parts[1] %}
+{% endif %}
+{% elif key is not string and key is not mapping and key|length == 2 %}
+{% if ':' in (key[1]|string) %}
+{% set vn.vlan = key[0] %}
+{% set vn.pfx = key[1] %}
+{% endif %}
+{% endif %}
+{% if vn.vlan and vn.pfx %}
+{% if vn.vlan not in vlan_list %}
+{% set _ = vlan_list.update({vn.vlan: []}) %}
+{% endif %}
+{% set prefix_list = vlan_list.get(vn.vlan) %}
+{% if vn.pfx not in prefix_list %}
+{% set _ = prefix_list.append(vn.pfx) %}
+{% set _ = vlan_list.update({vn.vlan: prefix_list}) %}
+{% endif %}
+{% endif %}
+{% endfor %}
 {% for name, prefixes in vlan_list.items() %}
+{% set ra = VLAN_INTERFACE.get(name, {}) %}
+{% if not ra %}
+{% set ra = VLAN_INTERFACE[name] if name in VLAN_INTERFACE else {} %}
+{% endif %}
+{% set has_ra = namespace(found=false) %}
+{% if ra is mapping %}
+{% for field, val in ra.items() %}
+{% if field is string and field.startswith('ipv6_ra_') and val is not none and val|string|trim != '' %}
+{% set has_ra.found = true %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% set enable = ra['ipv6_ra_enable'] | default('') | string | lower %}
+{% set suppress = ra['ipv6_ra_suppress'] | default('false') | string | lower %}
+{% set managed = ra['ipv6_ra_managed'] | default('false') | string | lower %}
+{% set other_config = ra['ipv6_ra_other_config'] | default('false') | string | lower %}
+{% set interval = ra['ipv6_ra_interval'] | default('') %}
+{% set lifetime = ra['ipv6_ra_lifetime'] | default('') %}
+{% set reachable_time = ra['ipv6_ra_reachable_time'] | default('') %}
+{% set ns = namespace(max_int=180, min_int=60) %}
+{% if has_ra.found %}
+{% set send_advert = 'on' %}
+{% if enable == 'false' or suppress == 'true' %}
+{% set send_advert = 'off' %}
+{% endif %}
+{% if interval %}
+{% set ns.max_int = interval | int %}
+{% set ns.min_int = ns.max_int // 3 %}
+{% if ns.min_int < 3 %}
+{% set ns.min_int = 3 %}
+{% endif %}
+{% endif %}
+{% else %}
+{% set send_advert = 'on' %}
+{% endif %}
 interface {{ name }}
 {
     IgnoreIfMissing on;
-    AdvSendAdvert on;
-    MinRtrAdvInterval 60;
-    MaxRtrAdvInterval 180;
+    AdvSendAdvert {{ send_advert }};
+    MinRtrAdvInterval {{ ns.min_int }};
+    MaxRtrAdvInterval {{ ns.max_int }};
+{% if lifetime %}
+    AdvDefaultLifetime {{ lifetime | int }};
+{% endif %}
+{% if reachable_time and reachable_time | string | trim != '' and reachable_time | int > 0 %}
+    AdvReachableTime {{ reachable_time | int }};
+{% endif %}
+{% if has_ra.found %}
+    AdvManagedFlag {{ 'on' if managed == 'true' else 'off' }};
+    AdvOtherConfigFlag {{ 'on' if other_config == 'true' else 'off' }};
+{% else %}
     AdvManagedFlag on;
     AdvOtherConfigFlag off;
+{% endif %}
     AdvLinkMTU 9100;
     AdvHomeAgentFlag off;
 {% for prefix in prefixes %}
+{% set pra_ns = namespace(pra=VLAN_INTERFACE.get((name, prefix), {})) %}
+{% if not pra_ns.pra %}
+{% set pra_ns.pra = VLAN_INTERFACE.get(name ~ '|' ~ prefix, {}) %}
+{% endif %}
+{% if not pra_ns.pra %}
+{% for k, v in VLAN_INTERFACE.items() %}
+{% if (k is string and k == name ~ '|' ~ prefix) or (k is not string and k is not mapping and k|length == 2 and k[0] == name and k[1] == prefix) %}
+{% set pra_ns.pra = v %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% set disable_adv = pra_ns.pra.get('ipv6_ra_prefix_disable_advertisement', 'false') | string | lower %}
+{% if disable_adv not in ['true', '1', 'yes', 'on'] %}
+{% set onlink = pra_ns.pra.get('ipv6_ra_prefix_enable_onlink', 'true') | string | lower %}
+{% set no_autoconf = pra_ns.pra.get('ipv6_ra_prefix_disable_autoconfig', 'true') | string | lower %}
+{% set valid_lt = pra_ns.pra.get('ipv6_ra_prefix_valid_lifetime', '') %}
+{% set preferred_lt = pra_ns.pra.get('ipv6_ra_prefix_preferred_lifetime', '') %}
+{% set valid_num = 4294967295 if not valid_lt else valid_lt | int %}
+{% set pref_num = 4294967295 if not preferred_lt else preferred_lt | int %}
+{% if valid_num != 4294967295 and (pref_num == 4294967295 or pref_num > valid_num) %}
+{% set pref_num = valid_num %}
+{% endif %}
     prefix {{ prefix | network }}/{{ prefix | prefixlen }} {
-        AdvOnLink on;
-        AdvAutonomous off;
+        AdvOnLink {{ 'on' if onlink == 'true' else 'off' }};
+        AdvAutonomous {{ 'off' if no_autoconf == 'true' else 'on' }};
         AdvRouterAddr off;
-        AdvValidLifetime infinity;
-        AdvPreferredLifetime infinity;
+        AdvValidLifetime {{ 'infinity' if valid_num == 4294967295 else valid_num }};
+        AdvPreferredLifetime {{ 'infinity' if pref_num == 4294967295 else pref_num }};
     };
+{% endif %}
 {% endfor %}
 };
 

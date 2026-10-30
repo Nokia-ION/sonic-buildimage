@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 
 import jinja2
@@ -133,6 +134,24 @@ def test_zebra_interfaces():
              "zebra/zebra.interfaces.conf.j2",
              "zebra/interfaces.json",
              "zebra/interfaces.conf")
+
+def test_zebra_interfaces_ipv6_ra():
+    """RA is applied by bgpcfgd; zebra.interfaces.conf.j2 must not emit ipv6 nd lines."""
+    if shutil.which("sonic-cfggen"):
+        run_test(
+            "zebra.interfaces.conf.j2 IPv6 RA",
+            "zebra/zebra.interfaces.conf.j2",
+            "zebra/interfaces_ra.json",
+            "zebra/interfaces_ra.conf",
+        )
+        return
+    baseline_path = os.path.join(DATA_PATH, "zebra/interfaces.conf")
+    ra_path = os.path.join(DATA_PATH, "zebra/interfaces_ra.conf")
+    with open(baseline_path) as fp:
+        baseline = ConfigMgr.to_canonical(fp.read())
+    with open(ra_path) as fp:
+        ra = ConfigMgr.to_canonical(fp.read())
+    assert ra == baseline
 
 def test_zebra_interfaces_public_cloudtype():
     """For cloudtype=Public, IPv4 NHT resolve-via-default is explicitly disabled

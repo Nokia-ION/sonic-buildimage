@@ -43,23 +43,15 @@ stderr_syslog=true
 dependent_startup=true
 dependent_startup_wait_for=rsyslogd:running
 
-{# Router advertiser should only run on ToR (T0) devices which have #}
-{# at least one VLAN interface which has an IPv6 address assigned #}
-{%- set vlan_v6 = namespace(count=0) -%}
+{# Router advertiser on ToR-class roles; VLAN IPv6 may be added after radv starts. #}
+{%- set router_advertiser = namespace(enabled=false) -%}
 {%- if DEVICE_METADATA.localhost.type -%}
   {%- if "ToRRouter" in DEVICE_METADATA.localhost.type or DEVICE_METADATA.localhost.type in ["EPMS", "MgmtTsToR"] -%}
-    {%- if VLAN_INTERFACE -%}
-      {%- for (name, prefix) in VLAN_INTERFACE|pfx_filter -%}
-        {# If this VLAN has an IPv6 address... #}
-        {%- if prefix | ipv6 -%}
-          {%- set vlan_v6.count = vlan_v6.count + 1 -%}
-        {%- endif -%}
-      {%- endfor -%}
-    {%- endif -%}
+    {%- set router_advertiser.enabled = true -%}
   {%- endif -%}
 {%- endif -%}
 
-{%- if vlan_v6.count > 0 %}
+{%- if router_advertiser.enabled %}
 [program:wait_for_link]
 command=/usr/bin/wait_for_link.sh
 priority=3
@@ -83,5 +75,18 @@ stdout_syslog=true
 stderr_logfile=NONE
 stderr_syslog=true
 dependent_startup=true
+dependent_startup_wait_for=wait_for_link:exited
+
+[program:radvd_conf_reload]
+command=/usr/bin/radvd_conf_reload.py
+priority=5
+autostart=false
+autorestart=true
+stdout_logfile=NONE
+stdout_syslog=true
+stderr_logfile=NONE
+stderr_syslog=true
+dependent_startup=true
+{# Reload must run even when /etc/radvd.conf is header-only (no VLAN v6 yet). #}
 dependent_startup_wait_for=wait_for_link:exited
 {% endif -%}
