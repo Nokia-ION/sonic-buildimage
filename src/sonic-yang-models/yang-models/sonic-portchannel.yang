@@ -276,6 +276,50 @@ module sonic-portchannel {
 			default disable;
 		}
 
+		leaf ipv6_ra_suppress {
+			description "When true, IPv6 router advertisements are not transmitted on this PortChannel interface";
+			type stypes:boolean_type;
+			default "false";
+		}
+
+		leaf ipv6_ra_interval {
+			description "Interval between periodic IPv6 router advertisements, in seconds";
+			type uint32;
+			units seconds;
+		}
+
+		leaf ipv6_ra_lifetime {
+			description "Router lifetime advertised in IPv6 router advertisements, in seconds";
+			type uint32;
+			units seconds;
+		}
+
+		leaf ipv6_ra_reachable_time {
+			description "Reachable Time advertised in IPv6 router advertisements (OpenConfig reachable-time), in milliseconds";
+			type uint32 {
+				range "0..3600000";
+			}
+			units milliseconds;
+		}
+
+		leaf ipv6_ra_enable {
+			description "When false, IPv6 router advertisements are not transmitted (OpenConfig enable)";
+			type stypes:boolean_type;
+			default "true";
+		}
+
+		leaf ipv6_ra_managed {
+			description "Advertise the managed address configuration flag in IPv6 RAs (OpenConfig managed)";
+			type stypes:boolean_type;
+			default "false";
+		}
+
+		leaf ipv6_ra_other_config {
+			description "Advertise the other configuration flag in IPv6 RAs (OpenConfig other-config)";
+			type stypes:boolean_type;
+			default "false";
+		}
+
                 leaf mac_addr {
                     description "Assign administrator-provided MAC address to Interface";
                     type yang:mac-address;
@@ -302,6 +346,28 @@ module sonic-portchannel {
                     /* key elements are mandatory by default */
                     type stypes:sonic-ip-prefix;
                 }
+
+		leaf ipv6_ra_prefix_valid_lifetime {
+			description "Valid lifetime for this prefix in IPv6 RAs (OpenConfig valid-lifetime)";
+			type uint32;
+			units seconds;
+		}
+
+		leaf ipv6_ra_prefix_preferred_lifetime {
+			description "Preferred lifetime for this prefix in IPv6 RAs (OpenConfig preferred-lifetime)";
+			type uint32;
+			units seconds;
+		}
+
+		leaf ipv6_ra_prefix_disable_autoconfig {
+			description "When true, disable SLAAC for this prefix in IPv6 RAs (OpenConfig disable-autoconfiguration)";
+			type stypes:boolean_type;
+		}
+
+		leaf ipv6_ra_prefix_enable_onlink {
+			description "When true, mark this prefix on-link in IPv6 RAs (OpenConfig enable-onlink)";
+			type stypes:boolean_type;
+		}
             } /* end of list PORTCHANNEL_INTERFACE_IPPREFIX_LIST */
 
         } /* end of container PORTCHANNEL_INTERFACE */

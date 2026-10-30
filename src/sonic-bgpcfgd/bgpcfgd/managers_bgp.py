@@ -10,6 +10,7 @@ from .manager import Manager
 from .template import TemplateFabric
 from .utils import run_command
 from .managers_device_global import DeviceGlobalCfgMgr
+from .zebra_ipv6_ra import apply_ipv6_ra, lookup_ipv6_ra_data, lookup_ipv6_ra_prefixes
 
 
 BGP_IDENTIFIER_MAX_LEN = 255
@@ -396,6 +397,15 @@ class BGPPeerMgrBase(Manager):
             self.peers.add(key)
             self.update_state_db(vrf, nbr, data, "SET")
             log_info("Peer '(%s|%s)' has been scheduled to be added with attributes '%s'" % print_data)
+            if interface_neighbor:
+                # BGP ipv6-auto-ra injects ra-interval 10; re-apply OC RA after that.
+                apply_ipv6_ra(
+                    self.cfg_mgr,
+                    nbr,
+                    lookup_ipv6_ra_data(self.directory, nbr),
+                    directory=self.directory,
+                    prefix_map=lookup_ipv6_ra_prefixes(self.directory, nbr),
+                )
 
         self.directory.put(self.db_name, self.table_name, vrf + '|' + nbr, data)
         return True

@@ -1,0 +1,21 @@
+{
+    "INTERFACE": {
+        "Ethernet0": {
+            "ipv6_ra_interval": "30",
+            "ipv6_ra_lifetime": "180",
+            "ipv6_ra_suppress": "false"
+        },
+        "Ethernet0|10.20.30.40/24": {},
+        "Ethernet4|20.20.30.40/24": {}
+    },
+    "PORTCHANNEL": {
+        "PortChannel10": {},
+        "PortChannel20": {}
+    },
+    "PORTCHANNEL_INTERFACE": {
+        "PortChannel10": {
+            "ipv6_ra_interval": "20",
+            "ipv6_ra_suppress": "true"
+        }
+    }
+}
