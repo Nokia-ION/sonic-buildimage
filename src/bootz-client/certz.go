@@ -102,6 +102,11 @@ func buildStagedProfile(id string, req *certz.UploadRequest) (*stagedProfile, []
 			if err != nil {
 				return nil, nil, fmt.Errorf("profile %q certificate chain: %w", id, err)
 			}
+			// The gNMI server signs with the TPM key only for the default profile.
+			if key == nil && id != gnmiDefaultProfile {
+				return nil, nil, fmt.Errorf("profile %q: the IDevID TPM key is only supported for profile %q",
+					id, gnmiDefaultProfile)
+			}
 			sp.cert, sp.key = cert, key
 		case *certz.Entity_TrustBundle:
 			if sp.ca != nil {
@@ -143,11 +148,20 @@ func buildStagedProfile(id string, req *certz.UploadRequest) (*stagedProfile, []
 }
 
 // certChainPEM returns the PEM certificate chain (leaf first) and private key,
-// and checks that the key matches the leaf certificate.
+// and checks that the key matches the leaf certificate. For the IDevID with
+// its TPM-resident key, it returns the IDevID chain and no key.
 func certChainPEM(chain *certz.CertificateChain) ([]byte, []byte, error) {
 	leaf := chain.GetCertificate()
 	if leaf == nil {
 		return nil, nil, fmt.Errorf("missing certificate")
+	}
+	if leaf.GetCertSource() == certz.Certificate_CERT_SOURCE_IDEVID &&
+		leaf.GetKeySource() == certz.Certificate_KEY_SOURCE_IDEVID_TPM {
+		_, idevid, err := ResolveIDevID("", "")
+		if err != nil {
+			return nil, nil, fmt.Errorf("IDevID certificate: %w", err)
+		}
+		return idevid, nil, nil
 	}
 	if leaf.GetCertSource() != certz.Certificate_CERT_SOURCE_UNSPECIFIED {
 		return nil, nil, fmt.Errorf("certificate source %s is not supported", leaf.GetCertSource())
@@ -353,7 +367,8 @@ func writeStagedProfiles(staged []*stagedProfile) error {
 			}
 		}
 		slog.Info("staged certz profile", "profile", sp.id,
-			"certificate", sp.cert != nil, "trust_bundle", sp.ca != nil)
+			"certificate", sp.cert != nil, "tpm_key", sp.cert != nil && sp.key == nil,
+			"trust_bundle", sp.ca != nil)
 	}
 	return nil
 }
@@ -424,7 +439,8 @@ func readStagedProfile(id string) (*stagedProfile, error) {
 		}
 		*dst = data
 	}
-	if (sp.cert == nil) != (sp.key == nil) {
+	// A default profile certificate without a key uses the IDevID TPM key.
+	if (sp.cert == nil) != (sp.key == nil) && (sp.cert == nil || id != gnmiDefaultProfile) {
 		return nil, fmt.Errorf("staged profile %q must have both certificate and key", id)
 	}
 	return sp, nil
@@ -432,17 +448,25 @@ func readStagedProfile(id string) (*stagedProfile, error) {
 
 // installDefaultProfile writes the gNMI listener's certificate, key and CA,
 // and removes the Certz links so the gNMI server re-reads them from GNMI|certs.
+// Without a key, the key file is removed so that gNMI signs with the TPM.
 func installDefaultProfile(sp *stagedProfile) error {
 	if err := os.MkdirAll(telemetryCertDir, 0755); err != nil {
 		return err
 	}
 	links := map[string]string{}
 	if sp.cert != nil {
-		if err := writeFileAtomic(gnxiKeyFile, sp.key, 0600); err != nil {
-			return err
+		if sp.key != nil {
+			if err := writeFileAtomic(gnxiKeyFile, sp.key, 0600); err != nil {
+				return err
+			}
 		}
 		if err := writeFileAtomic(gnxiCertFile, sp.cert, 0644); err != nil {
 			return err
+		}
+		if sp.key == nil {
+			if err := os.Remove(gnxiKeyFile); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 		}
 		links["server_cert.lnk"] = gnxiCertFile
 		links["server_key.lnk"] = gnxiKeyFile
