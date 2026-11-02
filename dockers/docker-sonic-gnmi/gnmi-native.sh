@@ -233,5 +233,19 @@ fi
 # --img_dir (/tmp/host_tmp) is container-local and NOT reachable by the host.
 TELEMETRY_ARGS+=" --img_dir /mnt/host/var/tmp"
 
+# Factory identity in the TPM (persistent key handles and certificate NV
+# indexes). gNMI serves the IDevID, or the oIDevID enrollz installs, with the
+# TPM key when the configured server key file does not exist, and gNSI
+# enrollz/attestz report the IDevID and IAK. The owner IAK cert that enrollz
+# installs is kept in /etc/sonic/telemetry, beside the factory cert paths.
+TPM_DEVICE=/dev/tpmrm0
+if [ -c "$TPM_DEVICE" ]; then
+    TELEMETRY_ARGS+=" --tpm_device $TPM_DEVICE"
+    TELEMETRY_ARGS+=" --tpm_key_handle 0x81820000 --idevid_cert_nv_index 0x01C90000"
+    TELEMETRY_ARGS+=" --iak_handle 0x81821000 --iak_cert_nv_index 0x01C91000"
+    TELEMETRY_ARGS+=" --idevid_cert_file /etc/sonic/telemetry/idevid-chain.crt"
+    TELEMETRY_ARGS+=" --iak_cert_file /etc/sonic/telemetry/iak-chain.crt"
+fi
+
 echo "gnmi args: $TELEMETRY_ARGS"
 exec /usr/sbin/telemetry ${TELEMETRY_ARGS}
