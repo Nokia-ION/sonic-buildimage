@@ -6,6 +6,8 @@ readonly BOOTZ_CONFIG="/host/bootz_config.json"
 readonly BOOTZ_CONFIG_TMP="/tmp/bootz_config.json"
 readonly BOOTZ_PENDING_REPORT="/host/bootz_pending_report.json"
 readonly BOOTZ_PENDING_CERTZ="/host/bootz_certz"
+# Tells bootz-discovery.sh that the server accepted the SUCCESS report.
+readonly BOOTZ_PROVISIONED="/host/bootz_provisioned"
 readonly BOOTZ_CLIENT="/usr/bin/bootz-client"
 readonly BOOTZ_WRAPPER="$(readlink -f "$0")"
 readonly BOOTZ_REPORT_UNIT="bootz-report"
@@ -87,6 +89,9 @@ report_pending() {
     local exit_code=$?
     check_status "$exit_code"
     rm -f "$BOOTZ_PENDING_REPORT"
+    if [[ "$message" == complete:* ]]; then
+        touch "$BOOTZ_PROVISIONED"
+    fi
     log "bootz completion report succeeded"
 }
 
@@ -158,6 +163,9 @@ cmd_provision() {
     local -a bootz_args ntp_args
     bootz_addr_args bootz_args "$BOOTZ_CONFIG_TMP"
     ntp_addr_args ntp_args "$BOOTZ_CONFIG_TMP"
+
+    # A failed run must leave discovery enabled on the next boot.
+    rm -f "$BOOTZ_PROVISIONED"
 
     # bootz-client stages the vendor config itself when it installs a new image. When the
     # intended image is already running it writes this file and reboots into it.
