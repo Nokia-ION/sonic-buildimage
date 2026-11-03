@@ -9,6 +9,7 @@ readonly BOOTZ_PENDING_CERTZ="/host/bootz_certz"
 readonly BOOTZ_CLIENT="/usr/bin/bootz-client"
 readonly BOOTZ_WRAPPER="$(readlink -f "$0")"
 readonly BOOTZ_REPORT_UNIT="bootz-report"
+readonly STARTUP_CONFIG="/etc/sonic/config_db.json"
 
 log() {
     echo "bootz: $*"
@@ -42,15 +43,6 @@ ntp_addr_args() {
     while read -r srv; do
         _ntp_args_arr+=("--ntp-addr" "$srv")
     done < <(jq -r '.NTP_SERVER // {} | keys[]' "$cfg")
-}
-
-# Move the downloaded config to /host/old_config so that a subsequent SONiC boot can use it
-# for config reload. We need to save the file in /host/ as everything else is ephemeral
-save_config() {
-    mkdir -p /host/old_config
-    if [[ -f /tmp/sonic-config.json ]]; then
-        cp /tmp/sonic-config.json /host/old_config/
-    fi
 }
 
 # Check if bootz client exited with success (0)
@@ -167,12 +159,13 @@ cmd_provision() {
     bootz_addr_args bootz_args "$BOOTZ_CONFIG_TMP"
     ntp_addr_args ntp_args "$BOOTZ_CONFIG_TMP"
 
-    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --config-db /tmp/sonic-config.json --mode provision"
-    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --config-db /tmp/sonic-config.json --mode provision
+    # bootz-client stages the vendor config itself when it installs a new image. When the
+    # intended image is already running it writes this file and reboots into it.
+    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --config-db $STARTUP_CONFIG --mode provision"
+    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --config-db "$STARTUP_CONFIG" --mode provision
     local exit_code=$?
     check_status "$exit_code"
     log "bootz provision command succeeded"
-    save_config
 }
 
 cmd_shut() {

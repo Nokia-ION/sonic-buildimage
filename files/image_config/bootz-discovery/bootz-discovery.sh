@@ -318,14 +318,18 @@ discover_and_provision() {
     "${DHCP_NTP_SERVERS:-}" "${DHCP_IFACE:-$iface}" "${DHCP_HOSTNAME:-}" \
     "${DHCP_SYSLOG_SERVERS:-}" "$BOOTZ_CONFIG_TMP"
 
+  # bootz-client reboots as soon as provisioning succeeds, so whatever the
+  # next boot needs has to be on /host before it runs.
+  cp "$BOOTZ_CONFIG_TMP" "$BOOTZ_CONFIG"
+  save_lease_to_host
+
   if ! "$BOOTZ" provision; then
     log "bootz provision failed"
+    rm -f "$BOOTZ_CONFIG" /host/dhclient.leases /host/dhclient6.leases
     return 1
   fi
 
   log "bootz provision succeeded"
-  mv "$BOOTZ_CONFIG_TMP" "$BOOTZ_CONFIG"
-  save_lease_to_host
   log "rebooting"
   reboot
   return 0
