@@ -30,7 +30,7 @@
 	url = https://github.com/p4lang/ptf.git
 [submodule "src/sonic-utilities"]
 	path = src/sonic-utilities
-	url = https://github.com/sonic-net/sonic-utilities
+	url = https://github.com/Nokia-ION/sonic-utilities
 [submodule "platform/broadcom/sonic-platform-modules-arista"]
 	path = platform/broadcom/sonic-platform-modules-arista
 	url = https://github.com/aristanetworks/sonic
@@ -76,7 +76,7 @@
 	branch = master
 [submodule "src/sonic-mgmt-common"]
 	path = src/sonic-mgmt-common
-	url = https://github.com/sonic-net/sonic-mgmt-common.git
+	url = https://github.com/Nokia-ION/sonic-mgmt-common.git
 [submodule "src/wpasupplicant/sonic-wpa-supplicant"]
 	path = src/wpasupplicant/sonic-wpa-supplicant
 	url = https://github.com/sonic-net/sonic-wpa-supplicant.git
@@ -101,10 +101,10 @@
 	url = https://github.com/sonic-net/sonic-dhcp-relay.git
 [submodule "src/sonic-host-services"]
 	path = src/sonic-host-services
-	url = https://github.com/sonic-net/sonic-host-services
+	url = https://github.com/Nokia-ION/sonic-host-services
 [submodule "src/sonic-gnmi"]
 	path = src/sonic-gnmi
-	url = https://github.com/sonic-net/sonic-gnmi.git
+	url = https://github.com/Nokia-ION/sonic-gnmi.git
 [submodule "src/sonic-bmp"]
 	path = src/sonic-bmp
 	url = https://github.com/sonic-net/sonic-bmp.git
