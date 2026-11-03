@@ -42,6 +42,10 @@ const (
 	gnxiKeyFile        = telemetryCertDir + "/server_key.key"
 	gnxiCAFile         = telemetryCertDir + "/ca_crt.cer"
 
+	// Owner certs that the gNMI server's EnrollZ service installs.
+	oIDevIDCertFile = telemetryCertDir + "/oIDevID_cert.pem"
+	oIAKCertFile    = telemetryCertDir + "/oiak.crt"
+
 	// Bootz forbids this ID in certz_profiles.
 	reservedProfileID = "system_default_profile"
 
@@ -51,6 +55,14 @@ const (
 )
 
 var profileIDPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// Names of the files a gNSI Certz rotation of the default profile writes into
+// telemetryCertDir: <profile>_<version>_<ns>_{cert,key}.pem and
+// ca_<profile>_<version>_<ns>_bundle.pem.
+var (
+	rotatedGnxiCertPattern = regexp.MustCompile(`^` + gnmiDefaultProfile + `_.+_[0-9]+_(cert|key)\.pem$`)
+	rotatedGnxiCAPattern   = regexp.MustCompile(`^ca_` + gnmiDefaultProfile + `_.+_[0-9]+_bundle\.pem$`)
+)
 
 // stagedProfile is the PEM material of one Certz profile.
 type stagedProfile struct {
@@ -485,7 +497,41 @@ func installDefaultProfile(sp *stagedProfile) error {
 			}
 		}
 	}
+	removeOwnerCredentials(sp.cert != nil, sp.ca != nil)
 	return nil
+}
+
+// removeOwnerCredentials deletes what an earlier owner left for the default
+// profile once Bootz has replaced it: the Certz-rotated certificates and keys
+// and the EnrollZ oIDevID and oIAK certs when cert is set, the Certz-rotated
+// trust bundles when ca is set. The owner enrolls the device again after the
+// Bootz SUCCESS report. Failures are logged; the files are no longer used.
+func removeOwnerCredentials(cert, ca bool) {
+	var stale []string
+	if cert {
+		stale = append(stale, oIDevIDCertFile, oIAKCertFile)
+	}
+	entries, err := os.ReadDir(telemetryCertDir)
+	if err != nil {
+		slog.Warn("failed to list old owner credentials", "path", telemetryCertDir, "err", err)
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		name := e.Name()
+		if (cert && rotatedGnxiCertPattern.MatchString(name)) || (ca && rotatedGnxiCAPattern.MatchString(name)) {
+			stale = append(stale, filepath.Join(telemetryCertDir, name))
+		}
+	}
+	for _, path := range stale {
+		err := os.Remove(path)
+		if err == nil {
+			slog.Info("removed old owner credential", "path", path)
+		} else if !os.IsNotExist(err) {
+			slog.Warn("failed to remove old owner credential", "path", path, "err", err)
+		}
+	}
 }
 
 // installCustomProfile lays out a non-default profile the way the gNMI Certz
