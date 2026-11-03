@@ -10,6 +10,10 @@ readonly LOGFILE="/var/log/bootz-discovery.log"
 readonly LEASE_FILE="/tmp/bootz-dhcp-lease.sh"
 readonly BOOTZ_CONFIG_TMP="/tmp/bootz_config.json"
 readonly BOOTZ_CONFIG="/host/bootz_config.json"
+# Written by the bootz wrapper: after provisioning succeeds, and once the
+# server has accepted the SUCCESS report.
+readonly BOOTZ_PENDING_REPORT="/host/bootz_pending_report.json"
+readonly BOOTZ_PROVISIONED="/host/bootz_provisioned"
 readonly BOOTZ="/usr/bin/bootz"
 readonly CHASSIS_SCRIPT="/usr/local/bin/bootz-get-chassis.py"
 readonly INVENTORY="/run/inventory.json"
@@ -295,6 +299,30 @@ EOF
 }
 
 #######################################
+# Stop the dhclient daemons started by try_dhclient and try_dhclient6.
+# dhclient -1 stays running once it holds a lease, and every retry would
+# start another one.
+# Arguments:
+#   $1: Interface
+#######################################
+release_dhclient() {
+  local iface="$1"
+  command -v dhclient >/dev/null || return 0
+  dhclient -4 -x -pf /var/run/dhclient.pid "$iface" >/dev/null 2>&1
+  dhclient -6 -x -pf /var/run/dhclient6.pid "$iface" >/dev/null 2>&1
+  return 0
+}
+
+# Load LEASE_FILE, dropping values from an earlier lease.
+load_lease() {
+  unset DHCP_BOOTZ_SERVERS DHCP_NTP_SERVERS DHCP_SYSLOG_SERVERS \
+    DHCP_IP DHCP_GW DHCP_IFACE DHCP_HOSTNAME
+  [[ -f "$LEASE_FILE" ]] || return 1
+  # shellcheck source=/dev/null
+  . "$LEASE_FILE"
+}
+
+#######################################
 # Run one discovery cycle: DHCP, then provision if a server was offered.
 # Returns:
 #   0 if provisioning succeeded, 1 otherwise
@@ -303,13 +331,17 @@ discover_and_provision() {
   local iface="$1"
 
   rm -f "$LEASE_FILE"
-  try_dhclient6 "$iface" || try_dhclient "$iface"
+  try_dhclient6 "$iface"
+  load_lease
 
-  [[ -f "$LEASE_FILE" ]] || return 1
-  # shellcheck source=/dev/null
-  . "$LEASE_FILE"
+  # A DHCPv6 lease without option 136 says nothing about DHCPv4 option 143.
+  if [[ -z "${DHCP_BOOTZ_SERVERS:-}" ]]; then
+    rm -f "$LEASE_FILE"
+    try_dhclient "$iface"
+    load_lease || return 1
+  fi
 
-  if [[ -z "$DHCP_BOOTZ_SERVERS" ]]; then
+  if [[ -z "${DHCP_BOOTZ_SERVERS:-}" ]]; then
     log "no bootz-servers offered"
     return 1
   fi
@@ -336,6 +368,13 @@ discover_and_provision() {
 }
 
 main() {
+  # The pending report is sent later in this boot by bootz.service. Remove
+  # BOOTZ_PROVISIONED to provision again.
+  if [[ -f "$BOOTZ_PROVISIONED" || -f "$BOOTZ_PENDING_REPORT" ]]; then
+    log "already provisioned by bootz, skipping discovery"
+    exit 0
+  fi
+
   log "starting bootz discovery"
   import_cmdline
 
@@ -346,6 +385,7 @@ main() {
     if write_inventory && discover_and_provision "$iface"; then
       exit 0
     fi
+    release_dhclient "$iface"
     log "discovery cycle failed, retrying in ${RETRY_SECONDS}s"
     sleep "$RETRY_SECONDS"
   done
