@@ -79,10 +79,11 @@ func GetDefaultNTPBinary() string {
 	return ntpBinaryChronyd
 }
 
-// ExecuteStandardInstaller executes standard SWI installer
+// ExecuteStandardInstaller executes standard SWI installer. Without -y,
+// sonic-installer prompts for confirmation, which aborts with no terminal.
 func ExecuteStandardInstaller(ctx context.Context, localPath string) (*exec.Cmd, error) {
 	slog.Info("executing installer",
 		"command", "sonic-installer",
 		"path", localPath)
-	return exec.CommandContext(ctx, "sudo", "sonic-installer", "install", localPath), nil
+	return exec.CommandContext(ctx, "sudo", "sonic-installer", "install", "-y", localPath), nil
 }
