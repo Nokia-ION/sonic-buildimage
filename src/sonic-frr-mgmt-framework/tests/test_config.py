@@ -824,6 +824,38 @@ def test_route_map_tag(run_cmd):
 
 @patch.dict('sys.modules', **mockmapping)
 @patch('frrcfgd.frrcfgd.g_run_command')
+def test_route_map_set_community_ref_additive(run_cmd):
+    """set_community_ref renders the members of the community set it names,
+    with "additive" when set_community_ref_additive is true, and clearing the
+    flag renders the members alone."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    daemon.config_db.serialize_key.side_effect = (
+        lambda key: '|'.join(key) if isinstance(key, tuple) else key)
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['COMMUNITY_SET']('COMMUNITY_SET', 'CS1', {'set_type': 'standard', 'match_action': 'any',
+                                                   'community_member': ['65000:100', '65000:200']})
+
+    run_cmd.reset_mock()
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RMC|10', {'route_operation': 'permit', 'set_community_ref': 'CS1',
+                                              'set_community_ref_additive': 'true'})
+    assert neighbor_cmds(run_cmd, 'set community') == ['set community 65000:100 65000:200 additive']
+
+    run_cmd.reset_mock()
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RMC|10', {'route_operation': 'permit', 'set_community_ref': 'CS1'})
+    assert neighbor_cmds(run_cmd, 'set community') == ['set community 65000:100 65000:200']
+
+    run_cmd.reset_mock()
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RMC|10', {'route_operation': 'permit', 'set_community_ref': 'CS1',
+                                              'set_community_ref_additive': 'false'})
+    assert neighbor_cmds(run_cmd, 'set community') == ['set community 65000:100 65000:200']
+
+    run_cmd.reset_mock()
+    hdlr['ROUTE_MAP']('ROUTE_MAP', 'RMC|10', {'route_operation': 'permit'})
+    assert neighbor_cmds(run_cmd, 'set community') == ['no set community 65000:100 65000:200']
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
 def test_static_route_bfd(run_cmd):
     """STATIC_ROUTE bfd, one element per next-hop, adds "bfd" to the route
     line of each next-hop it is true for, and turning it on replaces the line."""

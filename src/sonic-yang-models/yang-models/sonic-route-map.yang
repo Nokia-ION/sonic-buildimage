@@ -344,6 +344,11 @@ module sonic-route-map {
                     description "Refer community from community list";
                 }
 
+                leaf set_community_ref_additive {
+                    type boolean;
+                    description "Add the communities of the set_community_ref community set to those of the route, rather than replace them";
+                }
+
                 leaf-list set_ext_community_inline {
                     type string;
                     ordered-by user;
