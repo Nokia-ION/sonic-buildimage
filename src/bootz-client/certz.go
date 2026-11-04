@@ -99,8 +99,10 @@ func collectCertzProfiles(data *bpb.BootstrapDataResponse) (map[string]*certz.Up
 }
 
 // buildStagedProfile converts the Certz entities of one profile into PEM.
-// It returns the names of the entities that cannot be installed and were skipped.
-func buildStagedProfile(id string, req *certz.UploadRequest) (*stagedProfile, []string, error) {
+// idevidCertFile and idevidKeyFile are the file IDevID bootz-client was run
+// with, if any. It returns the names of the entities that cannot be installed
+// and were skipped.
+func buildStagedProfile(id string, req *certz.UploadRequest, idevidCertFile, idevidKeyFile string) (*stagedProfile, []string, error) {
 	sp := &stagedProfile{id: id}
 	var skipped []string
 
@@ -110,7 +112,7 @@ func buildStagedProfile(id string, req *certz.UploadRequest) (*stagedProfile, []
 			if sp.cert != nil {
 				return nil, nil, fmt.Errorf("profile %q has more than one certificate chain", id)
 			}
-			cert, key, err := certChainPEM(ent.CertificateChain)
+			cert, key, err := certChainPEM(ent.CertificateChain, idevidCertFile, idevidKeyFile)
 			if err != nil {
 				return nil, nil, fmt.Errorf("profile %q certificate chain: %w", id, err)
 			}
@@ -161,11 +163,19 @@ func buildStagedProfile(id string, req *certz.UploadRequest) (*stagedProfile, []
 
 // certChainPEM returns the PEM certificate chain (leaf first) and private key,
 // and checks that the key matches the leaf certificate. For the IDevID with
-// its TPM-resident key, it returns the IDevID chain and no key.
-func certChainPEM(chain *certz.CertificateChain) ([]byte, []byte, error) {
+// its TPM-resident key, it returns the IDevID chain and no key. When
+// bootz-client runs with a file IDevID, the IDevID is that cert and key.
+func certChainPEM(chain *certz.CertificateChain, idevidCertFile, idevidKeyFile string) ([]byte, []byte, error) {
 	leaf := chain.GetCertificate()
 	if leaf == nil {
 		return nil, nil, fmt.Errorf("missing certificate")
+	}
+	if leaf.GetCertSource() == certz.Certificate_CERT_SOURCE_IDEVID &&
+		idevidCertFile != "" && idevidKeyFile != "" {
+		switch leaf.GetKeySource() {
+		case certz.Certificate_KEY_SOURCE_UNSPECIFIED, certz.Certificate_KEY_SOURCE_IDEVID_TPM:
+			return fileIDevIDPEM(idevidCertFile, idevidKeyFile)
+		}
 	}
 	if leaf.GetCertSource() == certz.Certificate_CERT_SOURCE_IDEVID &&
 		leaf.GetKeySource() == certz.Certificate_KEY_SOURCE_IDEVID_TPM {
@@ -206,6 +216,23 @@ func certChainPEM(chain *certz.CertificateChain) ([]byte, []byte, error) {
 	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
 		return nil, nil, fmt.Errorf("private key does not match certificate: %w", err)
 	}
+	return certPEM, keyPEM, nil
+}
+
+// fileIDevIDPEM returns the file IDevID certificate chain and private key.
+func fileIDevIDPEM(certFile, keyFile string) ([]byte, []byte, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("IDevID certificate: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("IDevID private key: %w", err)
+	}
+	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+		return nil, nil, fmt.Errorf("IDevID private key does not match certificate: %w", err)
+	}
+	slog.Info("using the file IDevID as the certz certificate", "cert", certFile, "key", keyFile)
 	return certPEM, keyPEM, nil
 }
 
@@ -335,7 +362,7 @@ func (bc *BootzContext) stageCertzProfiles(data *bpb.BootstrapDataResponse) (int
 
 	var staged []*stagedProfile
 	for _, id := range ids {
-		sp, skipped, err := buildStagedProfile(id, reqs[id])
+		sp, skipped, err := buildStagedProfile(id, reqs[id], bc.config.IdevidCertFile, bc.config.IdevidKeyFile)
 		if err != nil {
 			return 0, err
 		}
