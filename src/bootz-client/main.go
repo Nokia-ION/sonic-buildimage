@@ -95,9 +95,9 @@ type BootzContext struct {
 	// stagedVendorConfig is the file the vendor config was staged to.
 	stagedVendorConfig string
 
-	// movedStartupConfigs are the running image's startup configs that were
-	// moved aside for the factory default config.
-	movedStartupConfigs []string
+	// startupConfigBackups are the running image's startup configs backed up
+	// next to the staged vendor config.
+	startupConfigBackups []startupConfigBackup
 }
 
 // version info
