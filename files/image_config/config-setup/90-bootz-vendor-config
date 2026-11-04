@@ -1,0 +1,49 @@
+#!/bin/bash
+#
+# Factory default hook: deep merge the vendor config that bootz-client staged
+# for this image into the generated factory default config. The vendor config
+# wins where both set a value.
+#
+# config-setup sources this hook from generate_config, with the generated
+# config in DEST_FILE, so it must not exit.
+
+bootz_merge_vendor_config()
+{
+    local version vendor_config dest tmp
+
+    version=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version)
+    vendor_config="/host/image-${version}/bootz/vendor_config.json"
+    dest="${DEST_FILE:-/etc/sonic/config_db.json}"
+
+    [ -f "$vendor_config" ] || return 0
+
+    if ! jq -e 'type == "object"' "$vendor_config" > /dev/null 2>&1; then
+        echo "Bootz vendor config $vendor_config is not a config_db.json object, not merging it"
+        mv -f "$vendor_config" "${vendor_config}.invalid"
+        return 1
+    fi
+
+    # Except for keep-basic, config-setup runs these hooks before it generates
+    # the factory default config, and only generates it if no hook did.
+    if [ ! -e "$dest" ]; then
+        if ! sonic-cfggen -H -k ${HW_KEY} --preset ${DEFAULT_PRESET} > "$dest"; then
+            rm -f "$dest"
+            echo "Failed to generate the factory default config to merge bootz vendor config into"
+            return 1
+        fi
+    fi
+
+    tmp="${dest}.bootz.$$"
+    if ! jq --indent 4 -s '.[0] * .[1]' "$dest" "$vendor_config" > "$tmp"; then
+        rm -f "$tmp"
+        echo "Failed to merge bootz vendor config $vendor_config into $dest"
+        return 1
+    fi
+    mv -f "$tmp" "$dest"
+
+    # Merged once: a later factory reset must not bring it back.
+    mv -f "$vendor_config" "${vendor_config}.merged"
+    echo "Merged bootz vendor config $vendor_config into $dest"
+}
+
+bootz_merge_vendor_config

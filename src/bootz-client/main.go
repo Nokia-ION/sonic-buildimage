@@ -51,7 +51,6 @@ type Config struct {
 	NtpTimeout          time.Duration
 	ChassisDescriptor   string
 	ChassisScript       string
-	ConfigDBFile        string
 	ConfigInstaller     string
 	ImageFile           string
 	InstallImageCmd     string
@@ -91,6 +90,13 @@ type BootzContext struct {
 
 	// vendorConfig is the config_db.json content from the bootstrap data.
 	vendorConfig []byte
+
+	// stagedVendorConfig is the file the vendor config was staged to.
+	stagedVendorConfig string
+
+	// movedStartupConfigs are the running image's startup configs that were
+	// moved aside for the factory default config.
+	movedStartupConfigs []string
 }
 
 // version info
@@ -141,15 +147,15 @@ var (
 		"Chassis override: Path to a script that returns the chassis descriptor, "+
 			"or 'SELF' to read from "+defaultInventoryJSONPath,
 	)
-	configDBFile = flag.StringP(
+	_ = flag.StringP(
 		"config-db", "c",
-		"/etc/sonic/config_db.json",
-		"Location of target startup config file.",
+		"",
+		"Ignored.",
 	)
 	configInstaller = flag.StringP(
 		"config-installer", "i",
 		"",
-		"Path to an executable to process/install the vendor configuration file.",
+		"Path to an executable to process the vendor config staged for the running image.",
 	)
 	imageFile = flag.StringP(
 		"image-file", "f",
@@ -291,7 +297,6 @@ func setupFlagsConfig() {
 
 		fmt.Fprintln(os.Stderr, "\nCONFIG INSTALL PARAMETERS:")
 		printCustomFlag(os.Stderr,
-			"config-db",
 			"config-installer")
 
 		fmt.Fprintln(os.Stderr, "\nOPERATIONAL PARAMETERS:")
@@ -323,6 +328,9 @@ func setupFlagsConfig() {
 			"silence-ztp")
 		fmt.Fprintln(os.Stderr)
 	}
+
+	flag.CommandLine.MarkDeprecated("config-db",
+		"the vendor config is staged for config-setup to merge into the factory default config")
 
 	// Parse the flags from the command line
 	flag.Parse()
@@ -446,7 +454,6 @@ func main() {
 		NtpTimeout:          *ntpTimeout,
 		ChassisDescriptor:   *chassisDescriptor,
 		ChassisScript:       *chassisScript,
-		ConfigDBFile:        *configDBFile,
 		ConfigInstaller:     *configInstaller,
 		ImageFile:           *imageFile,
 		InstallImageCmd:     *installImageCmd,

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	ownershipvoucher "github.com/openconfig/bootz/common/ownership_voucher"
 	"github.com/openconfig/bootz/common/signature"
@@ -137,11 +138,11 @@ func (bc *BootzContext) writeBootstrapJsonData(resp *bpb.BootstrapDataResponse, 
 }
 
 // runConfigInstaller if an installer is specified invoke it providing
-// it with the path to the config-db file
+// it with the path to the staged vendor config file
 func runConfigInstaller(installerPath, configFilePath string) error {
 	slog.Info("running config installer", "path", installerPath, "config-file", configFilePath)
 
-	// Execute the installer: path/to/installer <config-db-file>
+	// Execute the installer: path/to/installer <vendor-config-file>
 	cmd := exec.Command(installerPath, configFilePath)
 
 	// Capture output for logging/debugging
@@ -248,8 +249,8 @@ func (bc *BootzContext) processBootstrapConfig(
 	if configLen == 0 {
 		slog.Warn("vendor config is empty; skipping file write.")
 	} else if bc.imageInstalled && cfg.ImageFile == "" {
-		slog.Info("vendor config will be applied by the new image on first boot",
-			"path", PendingConfigDBFile)
+		slog.Info("vendor config will be merged by the new image on first boot",
+			"path", bc.stagedVendorConfig)
 	} else {
 		content := string(config)
 		isTruncated := false
@@ -259,22 +260,18 @@ func (bc *BootzContext) processBootstrapConfig(
 			isTruncated = true
 		}
 
-		slog.Info("installing vendor config",
+		slog.Info("staging vendor config for the running image",
 			"size_bytes", configLen,
 			"truncated", isTruncated,
 			"content", content,
 		)
 
-		// Write the contents to the file specified by the flag
-		// 0644 sets permissions to: Owner (Read/Write), Group (Read), Others (Read)
-		if err := os.WriteFile(cfg.ConfigDBFile, config, 0644); err != nil {
-			return fmt.Errorf("failed to write vendor config to %s: %w",
-				cfg.ConfigDBFile, err)
+		if err := bc.stageRunningImageVendorConfig(); err != nil {
+			return err
 		}
-		slog.Info("successfully wrote vendor config", "filename", cfg.ConfigDBFile)
 
 		if cfg.ConfigInstaller != "" {
-			if err := runConfigInstaller(cfg.ConfigInstaller, cfg.ConfigDBFile); err != nil {
+			if err := runConfigInstaller(cfg.ConfigInstaller, bc.stagedVendorConfig); err != nil {
 				return err // This will trigger a retry in ExecuteWithRetry
 			}
 		} else {
@@ -286,8 +283,24 @@ func (bc *BootzContext) processBootstrapConfig(
 	return nil
 }
 
-// PendingConfigDBFile is the startup config handed to a newly installed image.
-const PendingConfigDBFile = "/host/old_config/config_db.json"
+const (
+	// VendorConfigFile is where an image finds the vendor config staged for
+	// it, relative to its /host/image-<version> directory. The config-setup
+	// hook 90-bootz-vendor-config reads the same path.
+	VendorConfigFile = "bootz/vendor_config.json"
+
+	// migratedConfigDir is where sonic-installer backs up /etc/sonic for the
+	// new image to migrate.
+	migratedConfigDir = "/host/old_config"
+
+	// startupConfigBackupSuffix is appended to the running image's startup
+	// configs when they are moved aside.
+	startupConfigBackupSuffix = ".pre-bootz"
+)
+
+// startupConfigFiles are the startup configs that config-setup uses instead
+// of generating the factory default config.
+var startupConfigFiles = []string{"config_db.json", "minigraph.xml"}
 
 // validateVendorConfig checks that a non-empty vendor config is a
 // config_db.json object.
@@ -302,27 +315,118 @@ func validateVendorConfig(config []byte) error {
 	if tables == nil {
 		return fmt.Errorf("vendor config is not a valid config_db.json object: got null")
 	}
-	if _, ok := tables["DEVICE_METADATA"]; !ok {
-		slog.Warn("vendor config has no DEVICE_METADATA table; it replaces the whole startup config")
+	return nil
+}
+
+// imageDir returns the /host directory of the SONiC image with the given
+// build version.
+func imageDir(version string) (string, error) {
+	dir := filepath.Join("/host", "image-"+version)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("image directory of %q: %w", version, err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("image directory of %q: %s is not a directory", version, dir)
+	}
+	return dir, nil
+}
+
+// installedImageDir returns the /host directory of the image installed from
+// the installer file localPath.
+func installedImageDir(localPath string) (string, error) {
+	out, err := exec.Command("sudo", "sonic-installer", "binary-version", localPath).Output()
+	if err != nil {
+		return "", fmt.Errorf("sonic-installer binary-version %s: %w (output: %s)",
+			localPath, err, strings.TrimSpace(string(out)))
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	version, ok := strings.CutPrefix(strings.TrimSpace(lines[len(lines)-1]), "SONiC-OS-")
+	if !ok || version == "" {
+		return "", fmt.Errorf("unexpected sonic-installer binary-version output %q", out)
+	}
+	return imageDir(version)
+}
+
+// stageVendorConfig writes the vendor config into the image directory dir.
+func (bc *BootzContext) stageVendorConfig(dir string) error {
+	path := filepath.Join(dir, VendorConfigFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	}
+	if err := writeFileAtomic(path, bc.vendorConfig, 0644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	bc.stagedVendorConfig = path
+	slog.Info("staged vendor config", "path", path)
+	return nil
+}
+
+// stageNewImageVendorConfig stages the vendor config for the image installed
+// from localPath. The image boots without a startup config, so config-setup
+// generates the factory default config and merges the vendor config into it.
+func (bc *BootzContext) stageNewImageVendorConfig(localPath string) error {
+	if len(bc.vendorConfig) == 0 {
+		return nil
+	}
+	dir, err := installedImageDir(localPath)
+	if err != nil {
+		return err
+	}
+	if err := bc.stageVendorConfig(dir); err != nil {
+		return err
+	}
+	for _, name := range startupConfigFiles {
+		path := filepath.Join(migratedConfigDir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
 	}
 	return nil
 }
 
-// stageVendorConfig places the vendor config where the new image's first
-// boot migrates it into /etc/sonic/config_db.json (rc.local moves
-// /host/old_config to /etc/sonic/old_config and config-setup loads it).
-func stageVendorConfig(config []byte) error {
-	if len(config) == 0 {
-		return nil
+// stageRunningImageVendorConfig stages the vendor config for the running
+// image and moves its startup configs aside, so on the next boot config-setup
+// generates the factory default config and merges the vendor config into it,
+// as it does for a new image.
+func (bc *BootzContext) stageRunningImageVendorConfig() error {
+	dir, err := imageDir(ReadCurrentVersion())
+	if err != nil {
+		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(PendingConfigDBFile), 0755); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(PendingConfigDBFile), err)
+	if err := bc.stageVendorConfig(dir); err != nil {
+		return err
 	}
-	if err := writeFileAtomic(PendingConfigDBFile, config, 0644); err != nil {
-		return fmt.Errorf("write %s: %w", PendingConfigDBFile, err)
+	for _, name := range startupConfigFiles {
+		path := filepath.Join("/etc/sonic", name)
+		err := os.Rename(path, path+startupConfigBackupSuffix)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("move %s aside: %w", path, err)
+		}
+		bc.movedStartupConfigs = append(bc.movedStartupConfigs, path)
+		slog.Info("moved startup config aside", "path", path, "backup", path+startupConfigBackupSuffix)
 	}
-	slog.Info("staged vendor config for the new image", "path", PendingConfigDBFile)
 	return nil
+}
+
+// unstageVendorConfig undoes the staging of a failed provisioning run, which
+// is followed by a reboot.
+func (bc *BootzContext) unstageVendorConfig() {
+	if bc.stagedVendorConfig != "" {
+		if err := os.Remove(bc.stagedVendorConfig); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to remove staged vendor config", "path", bc.stagedVendorConfig, "err", err)
+		}
+		bc.stagedVendorConfig = ""
+	}
+	for _, path := range bc.movedStartupConfigs {
+		if err := os.Rename(path+startupConfigBackupSuffix, path); err != nil {
+			slog.Warn("failed to restore startup config", "path", path, "err", err)
+		}
+	}
+	bc.movedStartupConfigs = nil
 }
 
 // PendingTelemetryDir is where the new image's first boot (config-setup
@@ -430,6 +534,7 @@ func (bc *BootzContext) handleResponse(ctx context.Context,
 		if rmErr := os.RemoveAll(PendingCertzDir); rmErr != nil {
 			slog.Warn("failed to remove staged certz profiles", "err", rmErr)
 		}
+		bc.unstageVendorConfig()
 		return fmt.Errorf("failed to process bootstrap config: %w", err)
 	}
 
