@@ -753,6 +753,11 @@ sudo cp $IMAGE_CONFIGS/bootz/bootz.service $FILESYSTEM_ROOT_USR_LIB_SYSTEMD_SYST
 echo "bootz.service" | sudo tee -a $GENERATED_SERVICE_FILE
 sudo LANG=C chroot $FILESYSTEM_ROOT systemctl enable bootz.service
 
+# Install the common IDevID in the image, so gNOI FactoryReset keeps it
+sudo install -d -m0755 $FILESYSTEM_ROOT/etc/sonic/bootz
+sudo install -m0644 $IMAGE_CONFIGS/bootz/common-idevid/idevid.crt $FILESYSTEM_ROOT/etc/sonic/bootz/idevid.crt
+sudo install -m0600 $IMAGE_CONFIGS/bootz/common-idevid/idevid.key $FILESYSTEM_ROOT/etc/sonic/bootz/idevid.key
+
 {% if include_bootz_discovery == "y" %}
 # Copy bootz discovery script and service file
 sudo install -m0755 $IMAGE_CONFIGS/bootz-discovery/bootz-discovery.sh $FILESYSTEM_ROOT/usr/bin/bootz-discovery.sh
