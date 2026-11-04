@@ -248,6 +248,10 @@ func (bc *BootzContext) processBootstrapConfig(
 
 	if configLen == 0 {
 		slog.Warn("vendor config is empty; skipping file write.")
+	} else if cfg.ConfigMode == ConfigModeMigrate {
+		slog.Warn("ignoring vendor config, the existing config is kept", "config_mode", cfg.ConfigMode)
+		bc.ReportInfoStatus("Vendor config ignored, the existing config is kept (config mode %s)",
+			cfg.ConfigMode)
 	} else if bc.imageInstalled && cfg.ImageFile == "" {
 		slog.Info("vendor config will be merged by the new image on first boot",
 			"path", bc.stagedVendorConfig)
@@ -280,6 +284,29 @@ func (bc *BootzContext) processBootstrapConfig(
 	}
 
 	slog.Info("completed processing bootstrap config")
+	return nil
+}
+
+// Values of --config-mode.
+const (
+	// ConfigModeMerge merges the vendor config into the factory default
+	// config of the intended image.
+	ConfigModeMerge = "merge"
+
+	// ConfigModeMigrate ignores the vendor config, and the intended image
+	// takes over the existing config as on a regular image upgrade.
+	ConfigModeMigrate = "migrate"
+)
+
+// backupRunningConfig backs up /etc/sonic to /host/old_config, from which
+// the new image migrates the config on first boot. sonic-installer does the
+// same, but the image installer run directly does not.
+func backupRunningConfig() error {
+	out, err := exec.Command("sudo", "config-setup", "backup").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("config-setup backup: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	slog.Info("backed up the running config for the new image", "path", migratedConfigDir)
 	return nil
 }
 
