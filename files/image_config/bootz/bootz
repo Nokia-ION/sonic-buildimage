@@ -11,7 +11,6 @@ readonly BOOTZ_PROVISIONED="/host/bootz_provisioned"
 readonly BOOTZ_CLIENT="/usr/bin/bootz-client"
 readonly BOOTZ_WRAPPER="$(readlink -f "$0")"
 readonly BOOTZ_REPORT_UNIT="bootz-report"
-readonly STARTUP_CONFIG="/etc/sonic/config_db.json"
 
 log() {
     echo "bootz: $*"
@@ -167,10 +166,10 @@ cmd_provision() {
     # A failed run must leave discovery enabled on the next boot.
     rm -f "$BOOTZ_PROVISIONED"
 
-    # bootz-client stages the vendor config itself when it installs a new image. When the
-    # intended image is already running it writes this file and reboots into it.
-    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --config-db $STARTUP_CONFIG --mode provision"
-    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --config-db "$STARTUP_CONFIG" --mode provision
+    # bootz-client stages the vendor config in the intended image's /host directory, and
+    # config-setup merges it into the factory default config when that image boots.
+    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode provision"
+    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode provision
     local exit_code=$?
     check_status "$exit_code"
     log "bootz provision command succeeded"
