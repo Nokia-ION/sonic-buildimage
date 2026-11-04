@@ -4,43 +4,75 @@
 # for this image into the generated factory default config. The vendor config
 # wins where both set a value.
 #
+# If the vendor config cannot be merged, or the merged config fails the YANG
+# validation of config reload, the config_db.json that bootz-client backed up
+# before provisioning is restored instead, and the vendor config is renamed
+# to vendor_config.json.rejected for the bootz boot report.
+#
 # config-setup sources this hook from generate_config, with the generated
 # config in DEST_FILE, so it must not exit.
 
+# Usage: bootz_validate_config <config_db.json>
+# config reload aborts on a config that fails this validation.
+bootz_validate_config()
+{
+    python3 - "$1" << 'EOF'
+import sys
+from config.main import config_file_yang_validation
+try:
+    valid = config_file_yang_validation(sys.argv[1])
+except BaseException:
+    valid = False
+sys.exit(0 if valid else 1)
+EOF
+}
+
 bootz_merge_vendor_config()
 {
-    local version vendor_config dest tmp
+    local version bootz_dir vendor_config previous_config dest tmp reason=""
 
     version=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version)
-    vendor_config="/host/image-${version}/bootz/vendor_config.json"
+    bootz_dir="/host/image-${version}/bootz"
+    vendor_config="${bootz_dir}/vendor_config.json"
+    previous_config="${bootz_dir}/config_db.json.pre-bootz"
     dest="${DEST_FILE:-/etc/sonic/config_db.json}"
+    tmp="${dest}.bootz.$$"
 
     [ -f "$vendor_config" ] || return 0
 
-    if ! jq -e 'type == "object"' "$vendor_config" > /dev/null 2>&1; then
-        echo "Bootz vendor config $vendor_config is not a config_db.json object, not merging it"
-        mv -f "$vendor_config" "${vendor_config}.invalid"
-        return 1
-    fi
-
     # Except for keep-basic, config-setup runs these hooks before it generates
     # the factory default config, and only generates it if no hook did.
-    if [ ! -e "$dest" ]; then
-        if ! sonic-cfggen -H -k ${HW_KEY} --preset ${DEFAULT_PRESET} > "$dest"; then
-            rm -f "$dest"
-            echo "Failed to generate the factory default config to merge bootz vendor config into"
-            return 1
-        fi
+    if ! jq -e 'type == "object"' "$vendor_config" > /dev/null 2>&1; then
+        reason="it is not a config_db.json object"
+    elif [ ! -e "$dest" ] && ! sonic-cfggen -H -k ${HW_KEY} --preset ${DEFAULT_PRESET} > "$dest"; then
+        rm -f "$dest"
+        reason="generating the factory default config failed"
+    elif ! jq --indent 4 -s '.[0] * .[1]' "$dest" "$vendor_config" > "$tmp"; then
+        reason="merging it into the factory default config failed"
+    elif ! bootz_validate_config "$tmp"; then
+        reason="the merged config fails YANG validation"
     fi
 
-    tmp="${dest}.bootz.$$"
-    if ! jq --indent 4 -s '.[0] * .[1]' "$dest" "$vendor_config" > "$tmp"; then
+    if [ -n "$reason" ]; then
         rm -f "$tmp"
-        echo "Failed to merge bootz vendor config $vendor_config into $dest"
+        # Rejected once: a later factory reset must not retry it.
+        mv -f "$vendor_config" "${vendor_config}.rejected"
+        echo "Bootz vendor config $vendor_config not applied: $reason"
+        if [ -f "$previous_config" ] && cp -f "$previous_config" "$dest"; then
+            echo "Restored the config from before bootz provisioning $previous_config to $dest"
+        else
+            echo "No config from before bootz provisioning restored, using the factory default config"
+        fi
+        # config-setup only prefers minigraph.xml before it runs these hooks.
+        if [ -f "${bootz_dir}/minigraph.xml.pre-bootz" ] &&
+           cp -f "${bootz_dir}/minigraph.xml.pre-bootz" /etc/sonic/minigraph.xml; then
+            echo "Restored the minigraph from before bootz provisioning to /etc/sonic/minigraph.xml," \
+                 "run 'config load_minigraph' to load it"
+        fi
         return 1
     fi
-    mv -f "$tmp" "$dest"
 
+    mv -f "$tmp" "$dest"
     # Merged once: a later factory reset must not bring it back.
     mv -f "$vendor_config" "${vendor_config}.merged"
     echo "Merged bootz vendor config $vendor_config into $dest"

@@ -320,8 +320,10 @@ const (
 	// new image to migrate.
 	migratedConfigDir = "/host/old_config"
 
-	// startupConfigBackupSuffix is appended to the running image's startup
-	// configs when they are moved aside.
+	// startupConfigBackupSuffix is appended to the backups of the running
+	// image's startup configs, which are kept next to the staged vendor
+	// config. The config-setup hook restores config_db.json from its backup
+	// if the vendor config cannot be merged.
 	startupConfigBackupSuffix = ".pre-bootz"
 )
 
@@ -381,12 +383,59 @@ func (bc *BootzContext) stageVendorConfig(dir string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
+	// Otherwise the boot report would report a vendor config rejected in an
+	// earlier run for this one.
+	for _, suffix := range []string{".merged", ".rejected"} {
+		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", path+suffix, err)
+		}
+	}
 	if err := writeFileAtomic(path, bc.vendorConfig, 0644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	bc.stagedVendorConfig = path
 	slog.Info("staged vendor config", "path", path)
 	return nil
+}
+
+// startupConfigBackup is a startup config of the running image and its
+// backup in the bootz directory of the image the vendor config is staged for.
+type startupConfigBackup struct {
+	path   string
+	backup string
+	// removed is set once path is removed for the factory default config.
+	removed bool
+}
+
+// backupStartupConfigs copies the running image's startup configs into the
+// bootz directory of the image directory dir.
+func (bc *BootzContext) backupStartupConfigs(dir string) error {
+	for _, name := range startupConfigFiles {
+		path := filepath.Join("/etc/sonic", name)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			continue
+		}
+		backup := filepath.Join(dir, filepath.Dir(VendorConfigFile), name+startupConfigBackupSuffix)
+		if err := copyFile(path, backup); err != nil {
+			return fmt.Errorf("back up %s: %w", path, err)
+		}
+		bc.startupConfigBackups = append(bc.startupConfigBackups, startupConfigBackup{path: path, backup: backup})
+		slog.Info("backed up startup config", "path", path, "backup", backup)
+	}
+	return nil
+}
+
+// copyFile copies src to dst with the permissions of src.
+func copyFile(src, dst string) error {
+	fi, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(dst, data, fi.Mode().Perm())
 }
 
 // stageNewImageVendorConfig stages the vendor config for the image installed
@@ -403,6 +452,9 @@ func (bc *BootzContext) stageNewImageVendorConfig(localPath string) error {
 	if err := bc.stageVendorConfig(dir); err != nil {
 		return err
 	}
+	if err := bc.backupStartupConfigs(dir); err != nil {
+		return err
+	}
 	for _, name := range startupConfigFiles {
 		path := filepath.Join(migratedConfigDir, name)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -413,9 +465,9 @@ func (bc *BootzContext) stageNewImageVendorConfig(localPath string) error {
 }
 
 // stageRunningImageVendorConfig stages the vendor config for the running
-// image and moves its startup configs aside, so on the next boot config-setup
-// generates the factory default config and merges the vendor config into it,
-// as it does for a new image.
+// image, backs up its startup configs and removes them, so on the next boot
+// config-setup generates the factory default config and merges the vendor
+// config into it, as it does for a new image.
 func (bc *BootzContext) stageRunningImageVendorConfig() error {
 	dir, err := imageDir(ReadCurrentVersion())
 	if err != nil {
@@ -424,17 +476,16 @@ func (bc *BootzContext) stageRunningImageVendorConfig() error {
 	if err := bc.stageVendorConfig(dir); err != nil {
 		return err
 	}
-	for _, name := range startupConfigFiles {
-		path := filepath.Join("/etc/sonic", name)
-		err := os.Rename(path, path+startupConfigBackupSuffix)
-		if os.IsNotExist(err) {
-			continue
+	if err := bc.backupStartupConfigs(dir); err != nil {
+		return err
+	}
+	for i := range bc.startupConfigBackups {
+		b := &bc.startupConfigBackups[i]
+		if err := os.Remove(b.path); err != nil {
+			return fmt.Errorf("remove %s: %w", b.path, err)
 		}
-		if err != nil {
-			return fmt.Errorf("move %s aside: %w", path, err)
-		}
-		bc.movedStartupConfigs = append(bc.movedStartupConfigs, path)
-		slog.Info("moved startup config aside", "path", path, "backup", path+startupConfigBackupSuffix)
+		b.removed = true
+		slog.Info("removed startup config for the factory default config", "path", b.path, "backup", b.backup)
 	}
 	return nil
 }
@@ -448,12 +499,18 @@ func (bc *BootzContext) unstageVendorConfig() {
 		}
 		bc.stagedVendorConfig = ""
 	}
-	for _, path := range bc.movedStartupConfigs {
-		if err := os.Rename(path+startupConfigBackupSuffix, path); err != nil {
-			slog.Warn("failed to restore startup config", "path", path, "err", err)
+	for _, b := range bc.startupConfigBackups {
+		if b.removed {
+			if err := copyFile(b.backup, b.path); err != nil {
+				slog.Warn("failed to restore startup config", "path", b.path, "backup", b.backup, "err", err)
+				continue
+			}
+		}
+		if err := os.Remove(b.backup); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to remove startup config backup", "path", b.backup, "err", err)
 		}
 	}
-	bc.movedStartupConfigs = nil
+	bc.startupConfigBackups = nil
 }
 
 // PendingTelemetryDir is where the new image's first boot (config-setup

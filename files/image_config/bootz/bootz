@@ -108,6 +108,16 @@ cmd_boot() {
         fi
     fi
 
+    # Renamed by the config-setup hook 90-bootz-vendor-config, which restores
+    # the config from before provisioning, if there was one, instead.
+    local version
+    version=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version 2>/dev/null)
+    if [[ -f "$BOOTZ_PENDING_REPORT" && ${#report_args[@]} -eq 0 &&
+          -f "/host/image-${version}/bootz/vendor_config.json.rejected" ]]; then
+        log "the vendor config was not applied, see the config-setup log"
+        report_args=("error:Booted installed image but the vendor config was not applied")
+    fi
+
     if [[ ! -f "$BOOTZ_PENDING_REPORT" ]] && ! check_config; then
         log "$BOOTZ_CONFIG not present, skipping boot"
 	if grep -iq "SONiC" /etc/os-release 2>/dev/null; then
