@@ -772,6 +772,8 @@ sudo chmod +x $FILESYSTEM_ROOT/etc/config-setup/config-migration-pre-hooks.d/01-
 sudo mkdir -p $FILESYSTEM_ROOT/etc/config-setup/config-migration-post-hooks.d
 sudo cp $IMAGE_CONFIGS/config-setup/01-post-security-cipher $FILESYSTEM_ROOT/etc/config-setup/config-migration-post-hooks.d/01-post-security-cipher
 sudo chmod +x $FILESYSTEM_ROOT/etc/config-setup/config-migration-post-hooks.d/01-post-security-cipher
+sudo mkdir -p $FILESYSTEM_ROOT/etc/config-setup/factory-default-hooks.d
+sudo install -m0755 $IMAGE_CONFIGS/config-setup/90-bootz-vendor-config $FILESYSTEM_ROOT/etc/config-setup/factory-default-hooks.d/90-bootz-vendor-config
 echo "config-setup.service" | sudo tee -a $GENERATED_SERVICE_FILE
 sudo LANG=C chroot $FILESYSTEM_ROOT systemctl enable config-setup.service
 
