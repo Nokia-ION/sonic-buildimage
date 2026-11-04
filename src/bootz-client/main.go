@@ -51,6 +51,7 @@ type Config struct {
 	NtpTimeout          time.Duration
 	ChassisDescriptor   string
 	ChassisScript       string
+	ConfigMode          string
 	ConfigInstaller     string
 	ImageFile           string
 	InstallImageCmd     string
@@ -151,6 +152,13 @@ var (
 		"config-db", "c",
 		"",
 		"Ignored.",
+	)
+	configMode = flag.String(
+		"config-mode",
+		ConfigModeMerge,
+		fmt.Sprintf("'%s' to merge the vendor config into the factory default config of the intended "+
+			"image, or '%s' to ignore the vendor config and keep the existing config.",
+			ConfigModeMerge, ConfigModeMigrate),
 	)
 	configInstaller = flag.StringP(
 		"config-installer", "i",
@@ -297,6 +305,7 @@ func setupFlagsConfig() {
 
 		fmt.Fprintln(os.Stderr, "\nCONFIG INSTALL PARAMETERS:")
 		printCustomFlag(os.Stderr,
+			"config-mode",
 			"config-installer")
 
 		fmt.Fprintln(os.Stderr, "\nOPERATIONAL PARAMETERS:")
@@ -361,6 +370,14 @@ func validateFlags() error {
 		// valid
 	default:
 		return fmt.Errorf("invalid --mode %q; must be 'provision', or 'report'", *mode)
+	}
+
+	switch *configMode {
+	case ConfigModeMerge, ConfigModeMigrate:
+		// valid
+	default:
+		return fmt.Errorf("invalid --config-mode %q; must be '%s' or '%s'",
+			*configMode, ConfigModeMerge, ConfigModeMigrate)
 	}
 
 	// Logic for reporting mode
@@ -454,6 +471,7 @@ func main() {
 		NtpTimeout:          *ntpTimeout,
 		ChassisDescriptor:   *chassisDescriptor,
 		ChassisScript:       *chassisScript,
+		ConfigMode:          *configMode,
 		ConfigInstaller:     *configInstaller,
 		ImageFile:           *imageFile,
 		InstallImageCmd:     *installImageCmd,

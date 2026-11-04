@@ -221,7 +221,11 @@ func (bc *BootzContext) installImage(ctx context.Context, cfg *Config, localPath
 
 	// The final SUCCESS report is sent by the installed image after reboot.
 	if cfg.ImageFile == "" {
-		if err := bc.stageNewImageVendorConfig(localPath); err != nil {
+		if cfg.ConfigMode == ConfigModeMigrate {
+			if err := backupRunningConfig(); err != nil {
+				return fmt.Errorf("SWI installed but backing up the running config failed: %w", err)
+			}
+		} else if err := bc.stageNewImageVendorConfig(localPath); err != nil {
 			return fmt.Errorf("SWI installed but staging vendor config failed: %w", err)
 		}
 		if err := stageTelemetryDir(); err != nil {
