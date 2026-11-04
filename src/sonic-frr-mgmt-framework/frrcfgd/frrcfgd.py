@@ -860,6 +860,8 @@ class CommandArgument(object):
             com_set = self.daemon.comm_set_list.get(self.value, None)
             if com_set is not None and com_set.is_configurable():
                 return ' '.join(com_set.mbr_list)
+        elif format == 'com-additive':
+            return ' additive' if self.enabled and str(self.value).lower() == 'true' else ''
         elif format == 'ext-com-list':
             if type(self.value) is tuple:
                 com_val, is_rt = self.value
@@ -1997,7 +1999,7 @@ class BGPConfigDaemon:
                          (('set_asn', '+set_repeat_asn'),   '[bgpd]{no:no-prefix}set as-path prepend {:repeat}', hdl_set_asn),
                          ('set_asn_list',                   '[bgpd]{no:no-prefix}set as-path prepend {:asn_list}', hdl_set_asn_list),
                          ('set_community_inline',           '[bgpd]{no:no-prefix}set community {}'),
-                         ('set_community_ref',              '[bgpd]{no:no-prefix}set community {:com-ref}'),
+                         (['set_community_ref', '+set_community_ref_additive'], '[bgpd]{no:no-prefix}set community {:com-ref}{:com-additive}'),
                          ('set_ext_community_inline',       '[bgpd]{no:no-prefix}set extcommunity {:ext-com-list}', hdl_set_extcomm, True),
                          ('set_ext_community_ref',          '[bgpd]{no:no-prefix}set extcommunity {:ext-com-ref}', hdl_set_extcomm, False),
                          ('set_tag',                        '{no:no-prefix}set tag {}')
