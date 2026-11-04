@@ -2706,7 +2706,6 @@ class BGPConfigDaemon:
         key_params = key.split('|')
         intf_cmd = 'interface {}'.format(key_params[0])
         cmd = 'vrrp {}'.format(key_params[1])
-        deferred_params = {'accept_mode', 'virtual_link_local'}
         cache_key = self.config_db.get_table_key(table, key)
 
         if not data:
@@ -2749,13 +2748,6 @@ class BGPConfigDaemon:
                     command += ['-c', '{} checksum-with-ipv4-pseudoheader'.format(cmd)]
                 else:
                     command += ['-c', 'no {} checksum-with-ipv4-pseudoheader'.format(cmd)]
-            elif param in deferred_params:
-                syslog.syslog(
-                    syslog.LOG_WARNING,
-                    '[vrrp cfgd](vrrp) deferred field {} for {}: persisted in CONFIG_DB but not programmed to FRR'.format(
-                        param, key
-                    ),
-                )
 
         self.__run_command(table, command)
         self.table_data_cache[cache_key] = dict(data)
@@ -2766,7 +2758,6 @@ class BGPConfigDaemon:
         key_params = key.split('|')
         intf_cmd = 'interface {}'.format(key_params[0])
         cmd = 'vrrp6 {}'.format(key_params[1])
-        deferred_params = {'accept_mode', 'virtual_link_local'}
         cache_key = self.config_db.get_table_key(table, key)
 
         if not data:
@@ -2803,13 +2794,6 @@ class BGPConfigDaemon:
                     command += ['-c', '{} preempt'.format(cmd)]
                 elif val in ('disabled', 'false', 'no', '0'):
                     command += ['-c', 'no {} preempt'.format(cmd)]
-            elif param in deferred_params:
-                syslog.syslog(
-                    syslog.LOG_WARNING,
-                    '[vrrp cfgd](vrrp6) deferred field {} for {}: persisted in CONFIG_DB but not programmed to FRR'.format(
-                        param, key
-                    ),
-                )
 
         self.__run_command(table, command)
         self.table_data_cache[cache_key] = dict(data)
