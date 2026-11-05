@@ -1,0 +1,1451 @@
+From 903268b18e42d062b3e41d9c2e0d6e7a41389bd4 Mon Sep 17 00:00:00 2001
+From: govi-nokia <govindaraj.haridass@nokia.com>
+Date: Sat, 5 Sep 2026 18:56:50 +0530
+Subject: [PATCH]     Persist extra lldpd neighbor, chassis, and statistics
+ fields for OpenConfig LLDP.
+
+    Write TTL, PVID, max-frame-size, custom TLVs, MED serial, and link-aggregation
+    into APPL_DB, scrape lldpcli statistics into COUNTERS_DB LLDP_STATISTICS, and
+    decode lldpd capability aliases including Wlan and Station.
+
+    Signed-off-by: govi-nokia <govindaraj.haridass@nokia.com>
+---
+ src/lldp_syncd/conventions.py                 |  39 ++-
+ src/lldp_syncd/daemon.py                      | 264 +++++++++++++++++-
+ tests/mock_tables/LLDP_ENTRY_TABLE.json       | 203 +++++++++++++-
+ tests/mock_tables/dbconnector.py              |  46 +--
+ tests/subproc_outputs/lldpcli_statistics.json |  39 +++
+ tests/test_lldpSyncDaemon.py                  | 185 +++++++++++-
+ 6 files changed, 742 insertions(+), 34 deletions(-)
+ create mode 100644 tests/subproc_outputs/lldpcli_statistics.json
+
+diff --git a/src/lldp_syncd/conventions.py b/src/lldp_syncd/conventions.py
+index bbf06e4..67fb09f 100644
+--- a/src/lldp_syncd/conventions.py
++++ b/src/lldp_syncd/conventions.py
+@@ -81,7 +81,10 @@ class LldpSystemCapabilitiesMap(int, Enum):
+             router(4),
+             telephone(5),
+             docsisCableDevice(6),
+-            stationOnly(7)
++            stationOnly(7),
++            cVlan(8),
++            sVlan(9),
++            twoPortMacRelay(10)
+     }
+     """
+     other = 0
+@@ -92,3 +95,37 @@ class LldpSystemCapabilitiesMap(int, Enum):
+     telephone = 5
+     docsisCableDevice = 6
+     stationOnly = 7
++    cVlan = 8
++    sVlan = 9
++    twoPortMacRelay = 10
++
++
++# lldpd JSON uses short labels ("Wlan", "Station", "Tel") that do not match
++# the IEEE/SNMP enumerant names. Map both onto the same bit index.
++LLDP_CAPABILITY_NAME_TO_BIT = {
++    "other": 0,
++    "repeater": 1,
++    "bridge": 2,
++    "mac_bridge": 2,
++    "mac-bridge": 2,
++    "wlanaccesspoint": 3,
++    "wlan": 3,
++    "wlan_access_point": 3,
++    "router": 4,
++    "telephone": 5,
++    "tel": 5,
++    "docsiscabledevice": 6,
++    "docsis": 6,
++    "stationonly": 7,
++    "station": 7,
++    "cvlan": 8,
++    "c-vlan": 8,
++    "c_vlan": 8,
++    "svlan": 9,
++    "s-vlan": 9,
++    "s_vlan": 9,
++    "twoportmacrelay": 10,
++    "two-port mac relay": 10,
++    "two_port_mac_relay": 10,
++    "tpmr": 10,
++}
+diff --git a/src/lldp_syncd/daemon.py b/src/lldp_syncd/daemon.py
+index eabc7eb..01405e4 100644
+--- a/src/lldp_syncd/daemon.py
++++ b/src/lldp_syncd/daemon.py
+@@ -10,12 +10,20 @@ from swsscommon.swsscommon import SonicV2Connector
+ 
+ from sonic_syncd import SonicSyncDaemon
+ from . import logger
+-from .conventions import LldpPortIdSubtype, LldpChassisIdSubtype, LldpSystemCapabilitiesMap
++from .conventions import (
++    LldpPortIdSubtype,
++    LldpChassisIdSubtype,
++    LLDP_CAPABILITY_NAME_TO_BIT,
++)
+ 
+ LLDPD_TIME_FORMAT = '%H:%M:%S'
+ 
+ DEFAULT_UPDATE_INTERVAL = 10
+ 
++# IEEE 802.1AB Organizationally Specific TLV type. lldpd reports these as
++# unknown-tlvs (OUI / subtype / value) without a type field.
++LLDP_ORG_SPECIFIC_TLV_TYPE = 127
++
+ # Match Front | Backplace | Management interface
+ # TODO: Need to chamge to util function which can provide
+ # backplane interface name.
+@@ -56,14 +64,55 @@ def parse_time(time_str):
+     return 0
+ 
+ 
++def _as_list(value):
++    """Normalize lldpd JSON that may be a dict (one item) or a list."""
++    if value is None:
++        return []
++    if isinstance(value, list):
++        return value
++    return [value]
++
++
++def _normalize_oui(oui):
++    """Convert lldpd OUI ('00,90,69' / '00:90:69' / '009069') to '00:90:69'."""
++    if not oui:
++        return ''
++    cleaned = str(oui).replace(',', '').replace(':', '').replace('-', '').replace(' ', '')
++    if len(cleaned) != 6:
++        return str(oui)
++    return ':'.join(cleaned[i:i + 2] for i in range(0, 6, 2)).lower()
++
++
++def _hex_bytes_to_string(value):
++    """Flatten lldpd comma/colon-separated hex bytes to a contiguous hex string."""
++    if value is None:
++        return ''
++    if isinstance(value, list):
++        return ''.join(str(part).strip() for part in value)
++    return str(value).replace(',', '').replace(':', '').replace('-', '').replace(' ', '')
++
++
+ class LldpSyncDaemon(SonicSyncDaemon):
+     """
+     This script uploads lldp information to Redis DB.
+-    Required lldp counters are kept in a separate database (number 1)
+-    within the same Redis instance on a switch
++
++    Neighbor and local chassis state go to APPL_DB. LLDP counters from
++    `lldpcli show statistics` go to COUNTERS_DB (LLDP_STATISTICS).
+     """
+     LLDP_ENTRY_TABLE = 'LLDP_ENTRY_TABLE'
+     LLDP_LOC_CHASSIS_TABLE = 'LLDP_LOC_CHASSIS'
++    LLDP_STATISTICS_TABLE = 'LLDP_STATISTICS'
++    LLDP_STATISTICS_GLOBAL_KEY = 'GLOBAL'
++
++    # lldpd JSON key -> COUNTERS_DB / OpenConfig counter field
++    LLDP_STAT_FIELD_MAP = (
++        ('tx', 'frame_out'),
++        ('rx', 'frame_in'),
++        ('rx_discarded_cnt', 'frame_discard'),
++        ('rx_unrecognized_cnt', 'tlv_unknown'),
++        ('insert_cnt', 'tlv_accepted'),
++        ('ageout_cnt', 'entries_aged_out'),
++    )
+ 
+     @unique
+     class PortIdSubtypeMap(int, Enum):
+@@ -148,23 +197,28 @@ class LldpSyncDaemon(SonicSyncDaemon):
+         if not capability_list:
+             return ""
+ 
+-        sys_cap = 0x00
++        sys_cap = 0
+         for capability in capability_list:
+             try:
+                 if (not enabled) or capability["enabled"]:
+-                    sys_cap |= 128 >> LldpSystemCapabilitiesMap[capability["type"].lower()]
++                    cap_name = capability["type"].lower().replace(" ", "")
++                    bit = LLDP_CAPABILITY_NAME_TO_BIT[cap_name]
++                    sys_cap |= 0x8000 >> bit
+             except KeyError:
+                 logger.debug("Unknown capability {}".format(capability["type"]))
+-        return "%0.2X 00" % sys_cap
++        return "%0.2X %0.2X" % ((sys_cap >> 8) & 0xFF, sys_cap & 0xFF)
+ 
+     def __init__(self, update_interval=None):
+         super(LldpSyncDaemon, self).__init__()
+         self._update_interval = update_interval or DEFAULT_UPDATE_INTERVAL
+         self.db_connector = SonicV2Connector(use_unix_socket_path=True)
+         self.db_connector.connect(self.db_connector.APPL_DB)
++        self.db_connector.connect(self.db_connector.COUNTERS_DB)
+ 
+         self.chassis_cache = {}
+         self.interfaces_cache = {}
++        self.stats_cache = {}
++        self._pending_statistics = None
+ 
+     @staticmethod
+     def _scrap_output(cmd):
+@@ -192,11 +246,18 @@ class LldpSyncDaemon(SonicSyncDaemon):
+         logger.debug("Invoking lldpctl with: {}".format(cmd))
+         cmd_local = ['/usr/sbin/lldpcli', '-f', 'json', 'show', 'chassis']
+         logger.debug("Invoking lldpcli with: {}".format(cmd_local))
++        cmd_stats = ['/usr/sbin/lldpcli', '-f', 'json', 'show', 'statistics']
++        logger.debug("Invoking lldpcli with: {}".format(cmd_stats))
+ 
+         lldp_json = self._scrap_output(cmd)
+         if lldp_json is None:
+             return None
+         lldp_json['lldp_loc_chassis'] = self._scrap_output(cmd_local)
++        # Statistics scrape is best-effort: neighbor sync still proceeds if
++        # lldpcli show statistics fails or returns empty.
++        stats_json = self._scrap_output(cmd_stats)
++        if stats_json is not None:
++            lldp_json['lldp_statistics'] = stats_json
+ 
+         return lldp_json
+ 
+@@ -223,6 +284,9 @@ class LldpSyncDaemon(SonicSyncDaemon):
+               lldpRemSysCapEnabled      LldpSystemCapabilitiesMap
+         }
+         """
++        self._pending_statistics = None
++        if isinstance(lldp_json, dict):
++            self._pending_statistics = self.parse_statistics(lldp_json.get('lldp_statistics'))
+         try:
+             interface_list = lldp_json['lldp'].get('interface') or []
+             parsed_interfaces = defaultdict(dict)
+@@ -238,7 +302,9 @@ class LldpSyncDaemon(SonicSyncDaemon):
+                 if 'port' in if_attributes:
+                     rem_port_keys = ('lldp_rem_port_id_subtype',
+                                      'lldp_rem_port_id',
+-                                     'lldp_rem_port_desc')
++                                     'lldp_rem_port_desc',
++                                     'lldp_rem_max_frame_size',
++                                     'lldp_rem_agg_port_id')
+                     parsed_port = list(zip(rem_port_keys, self.parse_port(if_attributes['port'])))
+                     parsed_interfaces[if_name].update(parsed_port)
+ 
+@@ -249,12 +315,19 @@ class LldpSyncDaemon(SonicSyncDaemon):
+                                         'lldp_rem_chassis_id',
+                                         'lldp_rem_sys_name',
+                                         'lldp_rem_sys_desc',
+-                                        'lldp_rem_man_addr')
++                                        'lldp_rem_man_addr',
++                                        'lldp_rem_ttl')
+                     parsed_chassis = list(zip(rem_chassis_keys,
+                                          self.parse_chassis(if_attributes['chassis'])))
+                     parsed_interfaces[if_name].update(parsed_chassis)
+                     chassis_id = parsed_chassis[1][1]
+ 
++                parsed_interfaces[if_name].update({
++                    'lldp_rem_port_vlan_id': self.parse_pvid(if_attributes),
++                    'lldp_rem_custom_tlvs': self.parse_unknown_tlvs(if_attributes),
++                    'lldp_rem_med_inv_serial': self.parse_med_serial(if_attributes),
++                })
++
+                 # lldpRemTimeMark           TimeFilter,
+                 parsed_interfaces[if_name].update({'lldp_rem_time_mark':
+                                                    str(parse_time(if_attributes.get('age')))})
+@@ -275,7 +348,8 @@ class LldpSyncDaemon(SonicSyncDaemon):
+                                     'lldp_loc_chassis_id',
+                                     'lldp_loc_sys_name',
+                                     'lldp_loc_sys_desc',
+-                                    'lldp_loc_man_addr')
++                                    'lldp_loc_man_addr',
++                                    'lldp_loc_ttl')
+                 parsed_chassis = dict(zip(loc_chassis_keys,
+                                      self.parse_chassis(lldp_json['lldp_loc_chassis']
+                                                         ['local-chassis']['chassis'])))
+@@ -311,16 +385,21 @@ class LldpSyncDaemon(SonicSyncDaemon):
+             mgmt_ip = attributes.get('mgmt-ip', '')
+             if isinstance(mgmt_ip, list):
+                 mgmt_ip = ','.join(mgmt_ip)
++            ttl = attributes.get('ttl', '')
++            if ttl is None:
++                ttl = ''
++            ttl = str(ttl)
+         except (KeyError, ValueError):
+             logger.exception("Could not infer system information from: {}"
+                              .format(chassis_attributes))
+-            chassis_id_subtype = chassis_id = sys_name = descr = mgmt_ip = ''
++            chassis_id_subtype = chassis_id = sys_name = descr = mgmt_ip = ttl = ''
+ 
+         return (chassis_id_subtype,
+                 chassis_id,
+                 sys_name,
+                 descr,
+                 mgmt_ip,
++                ttl,
+                 )
+ 
+     def parse_port(self, port_attributes):
+@@ -331,13 +410,82 @@ class LldpSyncDaemon(SonicSyncDaemon):
+ 
+         except ValueError:
+             logger.exception("Could not infer chassis subtype from: {}".format(port_attributes))
+-            subtype, value = None
++            subtype, value = None, None
++
++        mfs = port_attributes.get('mfs', '')
++        if mfs is None:
++            mfs = ''
++        aggregid = port_attributes.get('aggregation', '')
++        if aggregid is None:
++            aggregid = ''
+ 
+         return (subtype,
+                 value,
+                 port_attributes.get('descr', ''),
++                str(mfs),
++                str(aggregid),
+                 )
+ 
++    def parse_pvid(self, if_attributes):
++        """Return IEEE 802.1 Port VLAN ID when the VLAN entry is marked pvid."""
++        for entry in _as_list(if_attributes.get('vlan')):
++            if not isinstance(entry, dict):
++                continue
++            pvid = entry.get('pvid')
++            if pvid is True or str(pvid).lower() == 'true':
++                vlan_id = entry.get('vlan-id', '')
++                if vlan_id is None:
++                    return ''
++                return str(vlan_id)
++        return ''
++
++    def parse_unknown_tlvs(self, if_attributes):
++        """Serialize neighbor org-specific TLVs for APPL_DB (JSON array)."""
++        unknown = if_attributes.get('unknown-tlvs')
++        if not unknown:
++            return ''
++        if isinstance(unknown, dict):
++            tlvs = unknown.get('unknown-tlv', unknown)
++        else:
++            tlvs = unknown
++        parsed = []
++        for tlv in _as_list(tlvs):
++            if not isinstance(tlv, dict):
++                continue
++            oui = _normalize_oui(tlv.get('oui', ''))
++            subtype = tlv.get('subtype', '')
++            if subtype is None:
++                subtype = ''
++            value_hex = _hex_bytes_to_string(tlv.get('value', ''))
++            if not oui and not value_hex:
++                continue
++            parsed.append({
++                'type': LLDP_ORG_SPECIFIC_TLV_TYPE,
++                'oui': oui,
++                'oui-subtype': str(subtype),
++                'value': value_hex,
++            })
++        if not parsed:
++            return ''
++        return json.dumps(parsed, separators=(',', ':'))
++
++    def parse_med_serial(self, if_attributes):
++        """LLDP-MED Inventory serial number, if the peer advertised it."""
++        med = if_attributes.get('lldp-med')
++        if isinstance(med, dict):
++            inventory = med.get('inventory')
++            if isinstance(inventory, dict) and inventory.get('serial'):
++                return str(inventory.get('serial'))
++        chassis = if_attributes.get('chassis')
++        if isinstance(chassis, dict):
++            for chassis_body in chassis.values():
++                if not isinstance(chassis_body, dict):
++                    continue
++                inventory = chassis_body.get('inventory')
++                if isinstance(inventory, dict) and inventory.get('serial'):
++                    return str(inventory.get('serial'))
++        return ''
++
+     def cache_diff(self, cache, update):
+         """
+         Find difference in keys between update and local cache dicts
+@@ -371,6 +519,96 @@ class LldpSyncDaemon(SonicSyncDaemon):
+ 
+         return True if changed_keys == 1 else False
+ 
++    @staticmethod
++    def _stat_value(container, key):
++        """Extract one lldpd JSON counter (string, int, or {key: value})."""
++        if not isinstance(container, dict):
++            return None
++        val = container.get(key)
++        if isinstance(val, dict):
++            inner = val.get(key)
++            if inner is None:
++                inner = val.get('value')
++            val = inner
++        if val is None or isinstance(val, bool):
++            return None
++        return str(val)
++
++    def _counters_from_container(self, container):
++        counters = {}
++        for src, dst in self.LLDP_STAT_FIELD_MAP:
++            val = self._stat_value(container, src)
++            counters[dst] = val if val is not None else '0'
++        return counters
++
++    def _sum_counters(self, entries):
++        totals = {dst: 0 for _, dst in self.LLDP_STAT_FIELD_MAP}
++        for entry in entries:
++            for dst in totals:
++                try:
++                    totals[dst] += int(entry.get(dst, 0) or 0)
++                except (TypeError, ValueError):
++                    pass
++        return {key: str(val) for key, val in totals.items()}
++
++    def parse_statistics(self, stats_json):
++        """Parse `lldpcli -f json show statistics` into COUNTERS_DB hashes."""
++        if not stats_json:
++            return None
++        lldp_root = stats_json.get('lldp', stats_json)
++        if not isinstance(lldp_root, dict):
++            return None
++
++        parsed = {}
++        interface_list = lldp_root.get('interface') or []
++        for interface in _as_list(interface_list):
++            if_name = None
++            if_attributes = None
++            if isinstance(interface, dict) and 'name' in interface and (
++                    'tx' in interface or 'rx' in interface):
++                if_name = str(interface.get('name'))
++                if_attributes = interface
++            else:
++                try:
++                    (if_name, if_attributes), = interface.items()
++                except (AttributeError, ValueError, TypeError):
++                    if not isinstance(interface_list, dict):
++                        continue
++                    if_name = interface
++                    if_attributes = interface_list.get(if_name)
++            if not if_name or not isinstance(if_attributes, dict):
++                continue
++            if re.match(SONIC_ETHERNET_RE_PATTERN, if_name) is None:
++                logger.warning("Ignoring statistics for interface '{}'".format(if_name))
++                continue
++            parsed[if_name] = self._counters_from_container(if_attributes)
++
++        summary = lldp_root.get('summary')
++        if parsed:
++            parsed[self.LLDP_STATISTICS_GLOBAL_KEY] = self._sum_counters(
++                [v for k, v in parsed.items() if k != self.LLDP_STATISTICS_GLOBAL_KEY])
++        elif isinstance(summary, dict):
++            parsed[self.LLDP_STATISTICS_GLOBAL_KEY] = self._counters_from_container(summary)
++        else:
++            return None
++        return parsed
++
++    def sync_statistics(self, parsed_stats):
++        """Write parsed LLDP counters to COUNTERS_DB LLDP_STATISTICS."""
++        if not parsed_stats:
++            return
++        logger.debug("Initiating LLDP statistics sync to COUNTERS_DB...")
++        new, changed, deleted = self.cache_diff(self.stats_cache, parsed_stats)
++        for if_name in list(new) + list(changed):
++            table_key = ':'.join([self.LLDP_STATISTICS_TABLE, if_name])
++            self.db_connector.hmset(self.db_connector.COUNTERS_DB, table_key, parsed_stats[if_name])
++            logger.debug("sync'd statistics {}: {}".format(table_key, parsed_stats[if_name]))
++        for if_name in deleted:
++            table_key = ':'.join([self.LLDP_STATISTICS_TABLE, if_name])
++            self.db_connector.delete(self.db_connector.COUNTERS_DB, table_key)
++            logger.info("Delete statistics table_key: {}".format(table_key))
++        self.stats_cache = parsed_stats
++
+     def sync(self, parsed_update):
+         """
+         Sync LLDP information to redis DB.
+@@ -435,3 +673,7 @@ class LldpSyncDaemon(SonicSyncDaemon):
+             table_key = ':'.join([LldpSyncDaemon.LLDP_ENTRY_TABLE, interface])
+             self.db_connector.hmset(self.db_connector.APPL_DB, table_key, parsed_update[interface])
+             logger.info("Add new interface {} : {}".format(interface, parsed_update[interface]))
++
++        if self._pending_statistics is not None:
++            self.sync_statistics(self._pending_statistics)
++            self._pending_statistics = None
+diff --git a/tests/mock_tables/LLDP_ENTRY_TABLE.json b/tests/mock_tables/LLDP_ENTRY_TABLE.json
+index 73550f8..9d4cc5c 100644
+--- a/tests/mock_tables/LLDP_ENTRY_TABLE.json
++++ b/tests/mock_tables/LLDP_ENTRY_TABLE.json
+@@ -3,11 +3,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "ge-0/0/17",
+     "lldp_rem_port_desc": "TPS report vending machine",
++    "lldp_rem_max_frame_size": "1514",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch218ad08",
+     "lldp_rem_sys_desc": "I'm going to need you to come in on saturday",
+     "lldp_rem_man_addr": "",
++    "lldp_rem_ttl": "90",
++    "lldp_rem_port_vlan_id": "146",
++    "lldp_rem_custom_tlvs": "[{\"type\":127,\"oui\":\"00:90:69\",\"oui-subtype\":\"1\",\"value\":\"435530323133353130363530\"}]",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18542",
+     "lldp_rem_index": "2",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -17,11 +23,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet1",
+     "lldp_rem_port_desc": "this is a port description",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "101",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18545",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -31,11 +43,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet26",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "126",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18544",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -45,11 +63,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet27",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "127",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18544",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -59,11 +83,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet28",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "128",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18544",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -73,11 +103,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet29",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "129",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "2103",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -87,11 +123,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet30",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "130",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "1113",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -101,11 +143,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet4",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "104",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18545",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -115,11 +163,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet31",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "131",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "3844",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -129,11 +183,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet32",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "132",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "4834",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -143,11 +203,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet5",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "105",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18545",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -157,11 +223,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet6",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "106",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18545",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -171,11 +243,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet7",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "107",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "1775",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -185,11 +263,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet8",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "108",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18513",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -199,11 +283,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet9",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "109",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "1142",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -213,11 +303,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet10",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "110",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "152",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -227,11 +323,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet2",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "102",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -241,11 +343,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet11",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "111",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "572",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -255,11 +363,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet12",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "112",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "1202",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -269,11 +383,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet13",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "113",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "1202",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -283,11 +403,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet14",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "114",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -297,11 +423,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet15",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "115",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -311,11 +443,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet16",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "116",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -325,11 +463,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet17",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "117",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -339,11 +483,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet18",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "118",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -353,11 +503,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet19",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "119",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -367,11 +523,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet20",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "120",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -381,11 +543,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet3",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "103",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -395,11 +563,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet21",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "121",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "362",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -409,11 +583,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet22",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "122",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "362",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -423,11 +603,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet23",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "123",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "92",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -437,11 +623,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet24",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "switch13",
+     "lldp_rem_sys_desc": "I'm a little teapot.",
+     "lldp_rem_man_addr": "10.3.147.196",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "124",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "32",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "28 00",
+@@ -451,11 +643,17 @@
+     "lldp_rem_port_id_subtype": "5",
+     "lldp_rem_port_id": "Ethernet25",
+     "lldp_rem_port_desc": "",
++    "lldp_rem_max_frame_size": "9236",
++    "lldp_rem_agg_port_id": "",
+     "lldp_rem_chassis_id_subtype": "4",
+     "lldp_rem_chassis_id": "00:11:22:33:44:55",
+     "lldp_rem_sys_name": "",
+     "lldp_rem_sys_desc": "",
+     "lldp_rem_man_addr": "",
++    "lldp_rem_ttl": "120",
++    "lldp_rem_port_vlan_id": "125",
++    "lldp_rem_custom_tlvs": "",
++    "lldp_rem_med_inv_serial": "",
+     "lldp_rem_time_mark": "18543",
+     "lldp_rem_index": "1",
+     "lldp_rem_sys_cap_supported": "",
+@@ -467,7 +665,8 @@
+     "lldp_loc_sys_name": "arc-switch1025",
+     "lldp_loc_sys_desc": "Debian GNU/Linux 8 (jessie) Linux 3.16.0-5-amd64 #1 SMP Debian 3.16.51-3+deb8u1 (2018-01-08) x86_64",
+     "lldp_loc_man_addr": "10.1.0.32,fc00:1::32",
+-    "lldp_loc_sys_cap_supported": "28 00",
++    "lldp_loc_ttl": "120",
++    "lldp_loc_sys_cap_supported": "39 00",
+     "lldp_loc_sys_cap_enabled": "28 00"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/tests/mock_tables/dbconnector.py b/tests/mock_tables/dbconnector.py
+index 32dfb94..580866c 100644
+--- a/tests/mock_tables/dbconnector.py
++++ b/tests/mock_tables/dbconnector.py
+@@ -66,6 +66,9 @@ class SwssSyncClient(mockredis.MockRedis):
+                     for k, v in table.items():
+                         self.hset(h, k, v)
+ 
++        # COUNTERS_DB (id 2) starts empty; LLDP_STATISTICS hashes are written
++        # by LldpSyncDaemon.sync_statistics() during tests.
++
+     # Patch mockredis/mockredis/client.py
+     # The offical implementation assume decode_responses=False
+     # Here we detect the option and decode after doing encode
+@@ -103,6 +106,7 @@ class SwssSyncClient(mockredis.MockRedis):
+ class MockConnector(object):
+     APPL_DB = 0
+     CONFIG_DB = 4
++    COUNTERS_DB = 2
+     data = {}
+ 
+     def __init__(self, use_unix_socket_path=False, namespace=''):
+@@ -110,52 +114,58 @@ class MockConnector(object):
+         self.namespace = namespace
+         self.connected_dbs = []
+ 
++    def _store(self, db_id):
++        if db_id not in MockConnector.data:
++            MockConnector.data[db_id] = {}
++        return MockConnector.data[db_id]
++
+     def connect(self, db_id, retry_on=True):
+         self.connected_dbs.append(db_id)
++        store = self._store(db_id)
+         if db_id == 0:
+             with open(INPUT_DIR + '/LLDP_ENTRY_TABLE.json') as f:
+                 db = json.load(f)
+                 for h, table in db.items():
+-                    self.data[h] = {}
++                    store[h] = {}
+                     for k, v in table.items():
+-                        self.data[h][k] = v
++                        store[h][k] = v
+ 
+         elif db_id == 4:
+             with open(INPUT_DIR + '/CONFIG_DB.json') as f:
+                 db = json.load(f)
+                 for h, table in db.items():
+-                    self.data[h] = {}
++                    store[h] = {}
+                     for k, v in table.items():
+-                        self.data[h][k] = v
++                        store[h][k] = v
+ 
++        # COUNTERS_DB (id 2) starts empty; LLDP_STATISTICS hashes are written
++        # by LldpSyncDaemon.sync_statistics() during tests.
+ 
+     def get(self, db_id, key, field):
+-        return MockConnector.data[key][field]
++        return self._store(db_id)[key][field]
+ 
+     def keys(self, db_id):
+-        ret = []
+-        for key in MockConnector.data.keys():
+-            ret.append(key)
+-
+-        return ret
++        return list(self._store(db_id).keys())
+ 
+     def get_all(self, db_id, key):
+-        return MockConnector.data[key]
++        return self._store(db_id)[key]
+ 
+     def exists(self, db_id, key):
+-        return key in MockConnector.data
++        return key in self._store(db_id)
+ 
+     def set(self, db_id, key, field, value, blocking=False):
+-        self.data[key] = {}
+-        self.data[key][field] = value
++        store = self._store(db_id)
++        store[key] = {}
++        store[key][field] = value
+ 
+     def hmset(self, db_id, key, fieldsvalues):
+-        self.data[key] = {}
+-        for field,value in fieldsvalues.items():
+-            self.data[key][field] = value
++        store = self._store(db_id)
++        store[key] = {}
++        for field, value in fieldsvalues.items():
++            store[key][field] = value
+ 
+     def delete(self, db_id, key):
+-        del self.data[key]
++        del self._store(db_id)[key]
+ 
+ 
+ DBInterface._subscribe_keyspace_notification = _subscribe_keyspace_notification
+diff --git a/tests/subproc_outputs/lldpcli_statistics.json b/tests/subproc_outputs/lldpcli_statistics.json
+new file mode 100644
+index 0000000..299bf69
+--- /dev/null
++++ b/tests/subproc_outputs/lldpcli_statistics.json
+@@ -0,0 +1,39 @@
++{
++  "lldp": {
++    "interface": [
++      {
++        "eth0": {
++          "tx": { "tx": "10" },
++          "rx": { "rx": "20" },
++          "rx_discarded_cnt": { "rx_discarded_cnt": "1" },
++          "rx_unrecognized_cnt": { "rx_unrecognized_cnt": "2" },
++          "ageout_cnt": { "ageout_cnt": "3" },
++          "insert_cnt": { "insert_cnt": "4" },
++          "delete_cnt": { "delete_cnt": "5" }
++        }
++      },
++      {
++        "Ethernet0": {
++          "tx": "100",
++          "rx": "200",
++          "rx_discarded_cnt": "6",
++          "rx_unrecognized_cnt": "7",
++          "ageout_cnt": "8",
++          "insert_cnt": "9",
++          "delete_cnt": "10"
++        }
++      },
++      {
++        "docker0": {
++          "tx": "999",
++          "rx": "999",
++          "rx_discarded_cnt": "999",
++          "rx_unrecognized_cnt": "999",
++          "ageout_cnt": "999",
++          "insert_cnt": "999",
++          "delete_cnt": "999"
++        }
++      }
++    ]
++  }
++}
+diff --git a/tests/test_lldpSyncDaemon.py b/tests/test_lldpSyncDaemon.py
+index 768ecf1..2d1d619 100644
+--- a/tests/test_lldpSyncDaemon.py
++++ b/tests/test_lldpSyncDaemon.py
+@@ -54,13 +54,21 @@ class TestLldpSyncDaemon(TestCase):
+         with open(os.path.join(INPUT_DIR, 'lldpctl_no_neighbors_loc_mgmt_ip.json')) as f:
+             self._no_neighbors_loc_mgmt_ip = json.load(f)
+ 
++        with open(os.path.join(INPUT_DIR, 'lldpcli_statistics.json')) as f:
++            self._statistics = json.load(f)
++
+         self.daemon = lldp_syncd.LldpSyncDaemon()
+ 
+     def test_appl_db_uses_unix_socket(self):
+         self.assertIs(self.daemon.db_connector.use_unix_socket_path, True)
++        # One connector serves neighbor/chassis state (APPL_DB) and
++        # LLDP statistics (COUNTERS_DB), so both use the unix socket.
+         self.assertEqual(
+             self.daemon.db_connector.connected_dbs,
+-            [self.daemon.db_connector.APPL_DB]
++            [
++                self.daemon.db_connector.APPL_DB,
++                self.daemon.db_connector.COUNTERS_DB,
++            ]
+         )
+ 
+     def test_parse_json(self):
+@@ -139,7 +147,23 @@ class TestLldpSyncDaemon(TestCase):
+         db_loc_chassis_data = db.get_all(db.APPL_DB, 'LLDP_LOC_CHASSIS')
+         self.assertEqual(parsed_loc_chassis, db_loc_chassis_data)
+ 
+-    def test_remote_sys_capability_list(self):
++    def test_parse_sys_capabilities_lldpd_aliases_and_16bit(self):
++        caps = [
++            {"type": "Bridge", "enabled": True},
++            {"type": "Router", "enabled": True},
++            {"type": "Wlan", "enabled": False},
++            {"type": "Station", "enabled": False},
++            {"type": "C-VLAN", "enabled": True},
++        ]
++        # bits 2+4 -> 0x2800; Wlan bit 3 and Station bit 7 in supported
++        self.assertEqual(
++            self.daemon.parse_sys_capabilities(caps, enabled=True),
++            "28 80",
++        )
++        self.assertEqual(
++            self.daemon.parse_sys_capabilities(caps, enabled=False),
++            "39 80",
++        )
+         interface_list = self._interface_only['lldp'].get('interface')
+         for interface in interface_list:
+             (if_name, if_attributes), = interface.items()
+@@ -279,6 +303,68 @@ class TestLldpSyncDaemon(TestCase):
+                 else:
+                     jo[k] = db.get_all(db.APPL_DB, k)
+ 
++    def test_parse_openconfig_1_2_0_state_fields(self):
++        parsed = self.daemon.parse_update(self._json)
++
++        eth0 = parsed['eth0']
++        self.assertEqual(eth0['lldp_rem_ttl'], '90')
++        self.assertEqual(eth0['lldp_rem_max_frame_size'], '1514')
++        self.assertEqual(eth0['lldp_rem_port_vlan_id'], '146')
++        self.assertEqual(eth0['lldp_rem_agg_port_id'], '')
++        self.assertEqual(eth0['lldp_rem_med_inv_serial'], '')
++        custom = json.loads(eth0['lldp_rem_custom_tlvs'])
++        self.assertEqual(len(custom), 1)
++        self.assertEqual(custom[0]['type'], 127)
++        self.assertEqual(custom[0]['oui'], '00:90:69')
++        self.assertEqual(custom[0]['oui-subtype'], '1')
++        self.assertEqual(custom[0]['value'], '435530323133353130363530')
++
++        ethernet0 = parsed['Ethernet0']
++        self.assertEqual(ethernet0['lldp_rem_ttl'], '120')
++        self.assertEqual(ethernet0['lldp_rem_max_frame_size'], '9236')
++        self.assertEqual(ethernet0['lldp_rem_port_vlan_id'], '101')
++        self.assertEqual(ethernet0['lldp_rem_custom_tlvs'], '')
++
++        loc = parsed['local-chassis']
++        self.assertEqual(loc['lldp_loc_ttl'], '120')
++        self.assertEqual(loc['lldp_loc_man_addr'], '10.1.0.32,fc00:1::32')
++
++    def test_parse_aggregation_and_med_serial(self):
++        sample = {
++            'lldp': {
++                'interface': [{
++                    'Ethernet0': {
++                        'rid': '1',
++                        'age': '0 day, 00:00:10',
++                        'port': {
++                            'id': {'type': 'ifname', 'value': 'Ethernet1'},
++                            'descr': 'agg member',
++                            'mfs': '9216',
++                            'aggregation': '42',
++                        },
++                        'chassis': {
++                            'peer': {
++                                'id': {'type': 'mac', 'value': '00:11:22:33:44:55'},
++                                'ttl': '120',
++                                'descr': 'peer',
++                            }
++                        },
++                        'lldp-med': {
++                            'inventory': {
++                                'serial': 'SN-1234',
++                            }
++                        },
++                    }
++                }]
++            }
++        }
++        parsed = self.daemon.parse_update(sample)
++        entry = parsed['Ethernet0']
++        self.assertEqual(entry['lldp_rem_agg_port_id'], '42')
++        self.assertEqual(entry['lldp_rem_med_inv_serial'], 'SN-1234')
++        self.assertEqual(entry['lldp_rem_max_frame_size'], '9216')
++        self.assertEqual(entry['lldp_rem_ttl'], '120')
++
+     def test_chassis_cache_no_db_calls_when_unchanged(self):
+         """
+         Test that database operations are not called when chassis data hasn't changed.
+@@ -334,3 +420,98 @@ class TestLldpSyncDaemon(TestCase):
+             self.assertEqual(len(chassis_deletes), 0)
+             self.assertEqual(written_chassis, initial_cache)
+             self.assertEqual(self.daemon.chassis_cache, initial_cache)
++
++    def test_parse_statistics(self):
++        parsed = self.daemon.parse_statistics(self._statistics)
++        self.assertIsNotNone(parsed)
++        self.assertNotIn('docker0', parsed)
++
++        eth0 = parsed['eth0']
++        self.assertEqual(eth0['frame_out'], '10')
++        self.assertEqual(eth0['frame_in'], '20')
++        self.assertEqual(eth0['frame_discard'], '1')
++        self.assertEqual(eth0['tlv_unknown'], '2')
++        self.assertEqual(eth0['entries_aged_out'], '3')
++        self.assertEqual(eth0['tlv_accepted'], '4')
++
++        ethernet0 = parsed['Ethernet0']
++        self.assertEqual(ethernet0['frame_out'], '100')
++        self.assertEqual(ethernet0['frame_in'], '200')
++        self.assertEqual(ethernet0['frame_discard'], '6')
++        self.assertEqual(ethernet0['tlv_unknown'], '7')
++        self.assertEqual(ethernet0['entries_aged_out'], '8')
++        self.assertEqual(ethernet0['tlv_accepted'], '9')
++
++        global_stats = parsed['GLOBAL']
++        self.assertEqual(global_stats['frame_out'], '110')
++        self.assertEqual(global_stats['frame_in'], '220')
++        self.assertEqual(global_stats['frame_discard'], '7')
++        self.assertEqual(global_stats['tlv_unknown'], '9')
++        self.assertEqual(global_stats['entries_aged_out'], '11')
++        self.assertEqual(global_stats['tlv_accepted'], '13')
++
++    def test_parse_statistics_summary_only(self):
++        sample = {
++            'lldp': {
++                'summary': {
++                    'tx': '15',
++                    'rx': '25',
++                    'rx_discarded_cnt': '0',
++                    'rx_unrecognized_cnt': '1',
++                    'ageout_cnt': '2',
++                    'insert_cnt': '3',
++                }
++            }
++        }
++        parsed = self.daemon.parse_statistics(sample)
++        self.assertEqual(parsed['GLOBAL']['frame_out'], '15')
++        self.assertEqual(parsed['GLOBAL']['frame_in'], '25')
++        self.assertEqual(parsed['GLOBAL']['tlv_unknown'], '1')
++        self.assertEqual(parsed['GLOBAL']['tlv_accepted'], '3')
++        self.assertEqual(parsed['GLOBAL']['entries_aged_out'], '2')
++        self.assertEqual(list(parsed.keys()), ['GLOBAL'])
++
++    def test_parse_update_does_not_mix_statistics_into_neighbors(self):
++        payload = json.loads(json.dumps(self._json))
++        payload['lldp_statistics'] = self._statistics
++        parsed = self.daemon.parse_update(payload)
++        self.assertNotIn('GLOBAL', parsed)
++        self.assertNotIn('frame_in', parsed['Ethernet0'])
++        self.assertIsNotNone(self.daemon._pending_statistics)
++        self.assertIn('GLOBAL', self.daemon._pending_statistics)
++
++    def test_sync_statistics_roundtrip(self):
++        payload = json.loads(json.dumps(self._json))
++        payload['lldp_statistics'] = self._statistics
++        parsed_update = self.daemon.parse_update(payload)
++        self.daemon.sync(parsed_update)
++
++        db = self.daemon.db_connector
++        eth0 = db.get_all(db.COUNTERS_DB, 'LLDP_STATISTICS:eth0')
++        ethernet0 = db.get_all(db.COUNTERS_DB, 'LLDP_STATISTICS:Ethernet0')
++        global_stats = db.get_all(db.COUNTERS_DB, 'LLDP_STATISTICS:GLOBAL')
++
++        self.assertEqual(eth0['frame_in'], '20')
++        self.assertEqual(ethernet0['frame_out'], '100')
++        self.assertEqual(global_stats['frame_in'], '220')
++        self.assertFalse(db.exists(db.COUNTERS_DB, 'LLDP_STATISTICS:docker0'))
++
++        # Neighbor APPL_DB keys are unchanged by the counters write.
++        appl_keys = db.keys(db.APPL_DB)
++        self.assertTrue(any(k.startswith(TABLE_PREFIX) for k in appl_keys))
++        self.assertFalse(any(k.startswith('LLDP_STATISTICS:') for k in appl_keys))
++
++    def test_sync_statistics_deletes_stale_interface(self):
++        first = self.daemon.parse_statistics(self._statistics)
++        self.daemon.sync_statistics(first)
++        db = self.daemon.db_connector
++        self.assertTrue(db.exists(db.COUNTERS_DB, 'LLDP_STATISTICS:eth0'))
++
++        second = {
++            'Ethernet0': first['Ethernet0'],
++            'GLOBAL': first['Ethernet0'],
++        }
++        self.daemon.sync_statistics(second)
++        self.assertFalse(db.exists(db.COUNTERS_DB, 'LLDP_STATISTICS:eth0'))
++        self.assertTrue(db.exists(db.COUNTERS_DB, 'LLDP_STATISTICS:Ethernet0'))
++        self.assertTrue(db.exists(db.COUNTERS_DB, 'LLDP_STATISTICS:GLOBAL'))
+-- 
+2.34.1
+
