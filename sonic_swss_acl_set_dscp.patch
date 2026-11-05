@@ -1,0 +1,130 @@
+diff --git a/orchagent/aclorch.cpp b/orchagent/aclorch.cpp
+index f399c99c..9be78ba5 100755
+--- a/orchagent/aclorch.cpp
++++ b/orchagent/aclorch.cpp
+@@ -117,7 +117,8 @@ static acl_rule_attr_lookup_t aclL3ActionLookup =
+     { ACTION_DO_NOT_NAT_ACTION,                SAI_ACL_ENTRY_ATTR_ACTION_NO_NAT },
+     { ACTION_DISABLE_TRIM,                     SAI_ACL_ENTRY_ATTR_ACTION_PACKET_TRIM_DISABLE },
+     { ACTION_POLICER_ACTION,                   SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER },
+-    { ACTION_SET_TC,                           SAI_ACL_ENTRY_ATTR_ACTION_SET_TC }
++    { ACTION_SET_TC,                           SAI_ACL_ENTRY_ATTR_ACTION_SET_TC },
++    { ACTION_SET_DSCP,                         SAI_ACL_ENTRY_ATTR_ACTION_SET_DSCP }
+ };
+ 
+ static acl_rule_attr_lookup_t aclInnerActionLookup =
+@@ -2304,6 +2305,19 @@ bool AclRulePacket::validateAddAction(string attr_name, string _attr_value)
+ 
+         actionData.parameter.u8 = tc;
+     }
++    else if (attr_name == ACTION_SET_DSCP)
++    {
++        try
++        {
++            actionData.parameter.u8 = to_uint<uint8_t>(_attr_value, 0, 63);
++        }
++        catch (const exception &e)
++        {
++            SWSS_LOG_ERROR("Invalid DSCP value '%s' for action %s in rule %s (valid range 0-63): %s",
++                           _attr_value.c_str(), attr_name.c_str(), m_id.c_str(), e.what());
++            return false;
++        }
++    }
+     else
+     {
+         return false;
+@@ -2423,10 +2437,11 @@ bool AclRulePacket::validate()
+     size_t primaryActions = 0;
+     for (const auto& action : m_actions)
+     {
+-        // SET_POLICER and SET_TC are supplementary; they compose with a primary
+-        // action such as PACKET_ACTION on the same ACL entry.
++        // SET_POLICER, SET_TC and SET_DSCP are supplementary; they compose with a
++        // primary action such as PACKET_ACTION on the same ACL entry.
+         if (action.first != SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER &&
+-            action.first != SAI_ACL_ENTRY_ATTR_ACTION_SET_TC)
++            action.first != SAI_ACL_ENTRY_ATTR_ACTION_SET_TC &&
++            action.first != SAI_ACL_ENTRY_ATTR_ACTION_SET_DSCP)
+         {
+             primaryActions++;
+         }
+diff --git a/orchagent/aclorch.h b/orchagent/aclorch.h
+index 1a426798..5a1f30e5 100755
+--- a/orchagent/aclorch.h
++++ b/orchagent/aclorch.h
+@@ -86,6 +86,7 @@
+ #define ACTION_INNER_SRC_MAC_REWRITE_ACTION "INNER_SRC_MAC_REWRITE_ACTION"
+ #define ACTION_POLICER_ACTION               "POLICER_ACTION"
+ #define ACTION_SET_TC                       "SET_TC"
++#define ACTION_SET_DSCP                     "SET_DSCP"
+ 
+ #define PACKET_ACTION_FORWARD      "FORWARD"
+ #define PACKET_ACTION_DROP         "DROP"
+diff --git a/tests/mock_tests/aclorch_ut.cpp b/tests/mock_tests/aclorch_ut.cpp
+index 394ad7a7..cf77cf43 100755
+--- a/tests/mock_tests/aclorch_ut.cpp
++++ b/tests/mock_tests/aclorch_ut.cpp
+@@ -1641,6 +1641,64 @@ namespace aclorch_test
+         ASSERT_FALSE(orch->getAclRule(aclTableName, aclRuleName));
+     }
+ 
++    // SET_DSCP rewrites the DSCP of matching packets next to SET_TC on a table
++    // type that lists it; a value outside 0-63 is rejected.
++    TEST_F(AclOrchTest, AclRule_Set_Dscp_Action)
++    {
++        const string aclTableTypeName = "TEST_SET_DSCP_TYPE";
++        const string aclTableName     = "TEST_SET_DSCP_TABLE";
++        const string aclRuleName      = "TEST_SET_DSCP_RULE";
++
++        auto orch = createAclOrch();
++
++        if (!orch->isAclActionSupported(ACL_STAGE_INGRESS, SAI_ACL_ACTION_TYPE_SET_DSCP) ||
++            !orch->isAclActionSupported(ACL_STAGE_INGRESS, SAI_ACL_ACTION_TYPE_SET_TC))
++        {
++            GTEST_SKIP() << "SAI_ACL_ACTION_TYPE_SET_DSCP or SET_TC not supported by test SAI";
++        }
++
++        orch->doAclTableTypeTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableTypeName, SET_COMMAND,
++                    { { ACL_TABLE_TYPE_MATCHES, string(MATCH_SRC_IP) + "," + MATCH_DSCP },
++                      { ACL_TABLE_TYPE_ACTIONS,
++                        string(ACTION_PACKET_ACTION) + "," + ACTION_SET_TC + "," + ACTION_SET_DSCP },
++                      { ACL_TABLE_TYPE_BPOINT_TYPES, BIND_POINT_TYPE_PORT } } } }));
++
++        orch->doAclTableTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName, SET_COMMAND,
++                    { { ACL_TABLE_DESCRIPTION, "set-dscp table" },
++                      { ACL_TABLE_TYPE, aclTableTypeName },
++                      { ACL_TABLE_STAGE, STAGE_INGRESS },
++                      { ACL_TABLE_PORTS, "1,2" } } } }));
++        ASSERT_TRUE(orch->getAclTable(aclTableName));
++
++        orch->doAclRuleTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName + "|" + aclRuleName, SET_COMMAND,
++                    { { MATCH_DSCP, "5" },
++                      { ACTION_PACKET_ACTION, PACKET_ACTION_FORWARD },
++                      { ACTION_SET_TC, "4" },
++                      { ACTION_SET_DSCP, "4" } } } }));
++
++        auto rule = orch->getAclRule(aclTableName, aclRuleName);
++        ASSERT_TRUE(rule);
++        const auto &actions = Portal::AclRuleInternal::getActions(rule);
++        auto setDscpIt = actions.find(SAI_ACL_ENTRY_ATTR_ACTION_SET_DSCP);
++        ASSERT_NE(setDscpIt, actions.end());
++        EXPECT_EQ(setDscpIt->second.getSaiAttr().value.aclaction.parameter.u8, 4);
++        ASSERT_NE(actions.find(SAI_ACL_ENTRY_ATTR_ACTION_SET_TC), actions.end());
++
++        orch->doAclRuleTask(
++            deque<KeyOpFieldsValuesTuple>(
++                { { aclTableName + "|" + "INVALID_DSCP_RULE", SET_COMMAND,
++                    { { MATCH_SRC_IP, "2.2.2.2/32" },
++                      { ACTION_PACKET_ACTION, PACKET_ACTION_FORWARD },
++                      { ACTION_SET_DSCP, "64" } } } }));
++        ASSERT_FALSE(orch->getAclRule(aclTableName, "INVALID_DSCP_RULE"));
++    }
++
+     // An ACL rule with POLICER_ACTION referencing a POLICER entry is realized as
+     // SAI_ACL_ENTRY_ATTR_ACTION_SET_POLICER. A rule referencing a policer that
+     // does not exist yet is deferred (relies on the m_toSync retry) and not created.

@@ -112,4 +112,12 @@ apply_patch_files() {
     # https://github.com/govi-nokia/sonic-dbsyncd/commit/344e62e7 rebased onto sonic-dbsyncd#88
     _add_patch src/sonic-dbsyncd ../../sonic-dbsyncd-lldp-openconfig.patch
 
+    # Add support to set DSCP for Acl rule (OpenConfig QoS classifier remark set-dscp). Applies on top of
+    # sonic_swss_acl_set_tc.patch. GitLab issue 763.
+    _add_patch src/sonic-swss ../../sonic_swss_acl_set_dscp.patch
+
+    # Apply a queue's scheduler to the queue when its scheduler group holds every queue of the port
+    # (Vanguard XGS hierarchy), so STRICT and DWRR take effect per queue. GitLab issues 761 and 767.
+    _add_patch src/sonic-swss ../../sonic_swss_qos_queue_scheduler.patch
+
 }

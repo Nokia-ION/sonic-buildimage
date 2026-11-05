@@ -1,0 +1,141 @@
+diff --git a/orchagent/qosorch.cpp b/orchagent/qosorch.cpp
+index 12c2a3e2..017271c9 100644
+--- a/orchagent/qosorch.cpp
++++ b/orchagent/qosorch.cpp
+@@ -11,6 +11,8 @@
+ #include <iostream>
+ #include <string>
+ #include <climits>
++#include <algorithm>
++#include <set>
+ #include <boost/algorithm/string.hpp>
+ 
+ using namespace std;
+@@ -1627,6 +1629,66 @@ sai_object_id_t QosOrch::getSchedulerGroup(const Port &port, const sai_object_id
+     return SAI_NULL_OBJECT_ID;
+ }
+ 
++/*
++ * A scheduler group's profile sets how the group is scheduled against its
++ * siblings, so it stands for a queue only while the group holds that queue
++ * alone or with the multicast queue of the same index. Some hierarchies hang
++ * every queue of a port off one group, where each queue's profile would
++ * overwrite the one before it.
++ */
++bool QosOrch::isSchedulerGroupSharedByQueues(const Port &port, sai_object_id_t group_id)
++{
++    SWSS_LOG_ENTER();
++
++    const auto cached = m_scheduler_group_shared.find(group_id);
++    if (cached != m_scheduler_group_shared.end())
++    {
++        return cached->second;
++    }
++
++    const auto it = m_scheduler_group_port_info.find(port.m_port_id);
++    if (it == m_scheduler_group_port_info.end())
++    {
++        return false;
++    }
++
++    std::set<uint8_t> indexes;
++    const auto& scheduler_group_port_info = it->second;
++    for (size_t ii = 0; ii < scheduler_group_port_info.groups.size(); ii++)
++    {
++        if (scheduler_group_port_info.groups[ii] != group_id)
++        {
++            continue;
++        }
++
++        for (const auto& child_id : scheduler_group_port_info.child_groups[ii])
++        {
++            if (std::find(port.m_queue_ids.begin(), port.m_queue_ids.end(), child_id) == port.m_queue_ids.end())
++            {
++                continue;
++            }
++
++            sai_attribute_t attr;
++            attr.id = SAI_QUEUE_ATTR_INDEX;
++            if (sai_queue_api->get_queue_attribute(child_id, 1, &attr) != SAI_STATUS_SUCCESS)
++            {
++                SWSS_LOG_WARN("Failed to get index of queue 0x%" PRIx64 " of port:%s", child_id, port.m_alias.c_str());
++                return false;
++            }
++            indexes.insert(attr.value.u8);
++        }
++    }
++
++    bool shared = indexes.size() > 1;
++    if (shared)
++    {
++        SWSS_LOG_NOTICE("Scheduler group 0x%" PRIx64 " of port:%s holds %zu queue indexes, applying schedulers to its queues",
++                        group_id, port.m_alias.c_str(), indexes.size());
++    }
++    m_scheduler_group_shared[group_id] = shared;
++    return shared;
++}
++
+ bool QosOrch::applySchedulerToQueueSchedulerGroup(Port &port, size_t queue_ind, sai_object_id_t scheduler_profile_id)
+ {
+     SWSS_LOG_ENTER();
+@@ -1682,10 +1744,39 @@ bool QosOrch::applySchedulerToQueueSchedulerGroup(Port &port, size_t queue_ind,
+         }
+     }
+     
+-    /* Apply scheduler profile to all port groups  */
+     sai_attribute_t attr;
+     sai_status_t    sai_status;
+ 
++    if (gMySwitchType != "voq" && isSchedulerGroupSharedByQueues(port, group_id))
++    {
++        attr.id = SAI_QUEUE_ATTR_SCHEDULER_PROFILE_ID;
++        attr.value.oid = scheduler_profile_id;
++
++        sai_status = sai_queue_api->set_queue_attribute(queue_id, &attr);
++        if (SAI_STATUS_SUCCESS == sai_status)
++        {
++            SWSS_LOG_DEBUG("port:%s, scheduler_profile_id:0x%" PRIx64 " applied to queue:%zu", port.m_alias.c_str(), scheduler_profile_id, queue_ind);
++            return true;
++        }
++
++        /* The group holds every queue, so falling back to it would give them all this queue's scheduler. */
++        if (sai_status != SAI_STATUS_NOT_SUPPORTED && sai_status != SAI_STATUS_NOT_IMPLEMENTED &&
++            !SAI_STATUS_IS_ATTR_NOT_SUPPORTED(sai_status) && !SAI_STATUS_IS_ATTR_NOT_IMPLEMENTED(sai_status))
++        {
++            SWSS_LOG_ERROR("Failed applying scheduler profile:0x%" PRIx64 " to queue:%zu, port:%s", scheduler_profile_id, queue_ind, port.m_alias.c_str());
++            task_process_status handle_status = handleSaiSetStatus(SAI_API_QUEUE, sai_status);
++            if (handle_status != task_success)
++            {
++                return parseHandleSaiStatusFailure(handle_status);
++            }
++            return true;
++        }
++
++        SWSS_LOG_WARN("Queue scheduler profile is not supported, applying it to scheduler group:0x%" PRIx64 " of port:%s", group_id, port.m_alias.c_str());
++        m_scheduler_group_shared[group_id] = false;
++    }
++
++    /* Apply scheduler profile to all port groups  */
+     attr.id = SAI_SCHEDULER_GROUP_ATTR_SCHEDULER_PROFILE_ID;
+     attr.value.oid = scheduler_profile_id;
+ 
+diff --git a/orchagent/qosorch.h b/orchagent/qosorch.h
+index 8079e45b..63e064d2 100644
+--- a/orchagent/qosorch.h
++++ b/orchagent/qosorch.h
+@@ -223,6 +223,7 @@ private:
+     task_process_status handleGlobalQosMap(const string &op, KeyOpFieldsValuesTuple &tuple);
+ 
+     sai_object_id_t getSchedulerGroup(const Port &port, const sai_object_id_t queue_id);
++    bool isSchedulerGroupSharedByQueues(const Port &port, sai_object_id_t group_id);
+ 
+     bool applySchedulerToQueueSchedulerGroup(Port &port, size_t queue_ind, sai_object_id_t scheduler_profile_id);
+     bool applyWredProfileToQueue(Port &port, size_t queue_ind, sai_object_id_t sai_wred_profile);
+@@ -238,6 +239,7 @@ private:
+     };
+ 
+     std::unordered_map<sai_object_id_t, SchedulerGroupPortInfo_t> m_scheduler_group_port_info;
++    std::unordered_map<sai_object_id_t, bool> m_scheduler_group_shared;
+ 
+     friend QosMapHandler;
+     friend DscpToTcMapHandler;

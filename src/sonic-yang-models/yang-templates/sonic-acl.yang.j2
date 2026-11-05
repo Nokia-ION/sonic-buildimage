@@ -98,6 +98,24 @@ module sonic-acl {
 					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:type]" +
 					"/acl:ACTIONS[. = 'SET_TC']) > 0)";
 
+				leaf SET_DSCP {
+					description "DSCP value to rewrite on matching packets";
+					type uint8 {
+						range 0..63;
+					}
+				}
+				/* Validating 'SET_DSCP' is supported by the ACL table type and stage */
+				must "not(SET_DSCP) or " +
+					"(/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:stage = 'ingress' or " +
+					"/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:stage = 'INGRESS') and " +
+					"count(/acl:sonic-acl/acl:ACL_TABLE_TYPE/acl:ACL_TABLE_TYPE_LIST" +
+					"[acl:ACL_TABLE_TYPE_NAME = " +
+					"/acl:sonic-acl/acl:ACL_TABLE/acl:ACL_TABLE_LIST" +
+					"[acl:ACL_TABLE_NAME = current()/ACL_TABLE_NAME]/acl:type]" +
+					"/acl:ACTIONS[. = 'SET_DSCP']) > 0";
+
 				/* Validating 'PACKET_ACTION' exist if ACL type is 'CTRLPLANE' */
 				must "(not(../../ACL_TABLE/ACL_TABLE_LIST[ACL_TABLE_NAME=current()/ACL_TABLE_NAME]/type = 'CTRLPLANE')) or (boolean(PACKET_ACTION))";
 
@@ -315,8 +333,13 @@ module sonic-acl {
  					"/acl:MATCHES[. = 'TCP_FLAGS']) > 0";
 
 				leaf DSCP {
-					description "DSCP value to match";
-					type uint8;
+					description "DSCP value to match, either one value or 'value/mask'";
+					type union {
+						type uint8;
+						type string {
+							pattern "([0-9]|[1-5][0-9]|6[0-3])/([0-9]|[1-5][0-9]|6[0-3])";
+						}
+					}
 				}
 
 				leaf TC {
