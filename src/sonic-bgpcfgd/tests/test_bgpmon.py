@@ -903,6 +903,89 @@ def test_af_stats_route_map_change_updates_in_place(bgp_mon):
     assert "BGP_NEIGH_AF_STATS|default|11.0.0.155|ipv6_unicast" not in written_fields(captured)
 
 
+# 'show bgp vrf all summary json' as FRR 10.7 prints it: no totalPaths, and the
+# prefix count is ribCount.
+GLOBALS_SUMMARY_JSON = {
+    "ipv4Unicast": {"routerId": "11.0.0.64", "as": 65200, "ribCount": 3, "peerCount": 1},
+    "ipv6Unicast": {"routerId": "11.0.0.64", "as": 65200, "ribCount": 1, "peerCount": 1}
+}
+
+
+def globals_stats(v4_paths, v6_paths):
+    """'show bgp statistics-all json' cut down to the families read."""
+    return {
+        "ipv4Unicast": [{"instance": "VRF default", "totalPrefixes": 3, "totalAdvertisements": v4_paths}],
+        "ipv6Unicast": [{"instance": "VRF default", "totalPrefixes": 1, "totalAdvertisements": v6_paths}],
+        "l2VpnEvpn": [{"instance": "VRF default", "totalPrefixes": 0, "totalAdvertisements": 9}]
+    }
+
+
+def scrape_globals(bgp_mon, summary_by_vrf, stats_by_vrf):
+    """Run the globals scrape with one summary and one statistics reply per VRF;
+    a VRF missing from stats_by_vrf fails its statistics call."""
+    replies = {'show bgp vrf all summary json': (0, json.dumps(summary_by_vrf))}
+    for vrf in summary_by_vrf:
+        cmd = 'show bgp statistics-all json' if vrf == "default" else 'show bgp vrf %s statistics-all json' % vrf
+        replies[cmd] = (0, json.dumps(stats_by_vrf[vrf])) if vrf in stats_by_vrf else (1, "")
+
+    def _run(cmd):
+        return replies[cmd[-1]]
+
+    with patch('bgpmon.bgpmon.getstatusoutput_noshell', side_effect=_run) as mocked_cmd:
+        result = bgp_mon.get_all_globals_applied_states()
+    return result, [c.args[0][-1] for c in mocked_cmd.call_args_list]
+
+
+def test_globals_total_paths_from_table_statistics(bgp_mon):
+    """The paths are the unicast advertisements of the table statistics; the
+    prefixes stay the summary's ribCount."""
+    result, cmds = scrape_globals(bgp_mon, {"default": GLOBALS_SUMMARY_JSON}, {"default": globals_stats(5, 2)})
+    assert result is True
+    assert cmds == ['show bgp vrf all summary json', 'show bgp statistics-all json']
+    assert bgp_mon.new_globals_applied_state["default"] == {
+        'router_id': '11.0.0.64', 'local_asn': '65200', 'total_prefixes': '4', 'total_paths': '7'}
+
+
+def test_globals_zero_counts_are_published(bgp_mon):
+    """An empty table is reported as 0 rather than left out."""
+    empty = {af: dict(v, ribCount=0) for af, v in GLOBALS_SUMMARY_JSON.items()}
+    scrape_globals(bgp_mon, {"default": empty}, {"default": globals_stats(0, 0)})
+    fields = bgp_mon.new_globals_applied_state["default"]
+    assert fields['total_prefixes'] == '0'
+    assert fields['total_paths'] == '0'
+
+
+def test_globals_vrfs_are_asked_for_by_name(bgp_mon):
+    """The default instance is asked for without a vrf and every other one by
+    name, each counted apart."""
+    result, cmds = scrape_globals(bgp_mon, {"default": GLOBALS_SUMMARY_JSON, "Vrf_red": GLOBALS_SUMMARY_JSON},
+                                  {"default": globals_stats(5, 2), "Vrf_red": globals_stats(1, 0)})
+    assert result is True
+    assert sorted(cmds[1:]) == ['show bgp statistics-all json', 'show bgp vrf Vrf_red statistics-all json']
+    assert bgp_mon.new_globals_applied_state["Vrf_red"]['total_paths'] == '1'
+    assert bgp_mon.new_globals_applied_state["default"]['total_paths'] == '7'
+
+
+@patch('syslog.syslog')
+def test_globals_failed_statistics_leave_out_only_the_paths(mocked_syslog, bgp_mon):
+    """Statistics that cannot be read cost the path count alone; the rest of
+    the row is still published."""
+    result, _ = scrape_globals(bgp_mon, {"default": GLOBALS_SUMMARY_JSON}, {})
+    assert result is True
+    assert bgp_mon.new_globals_applied_state["default"] == {
+        'router_id': '11.0.0.64', 'local_asn': '65200', 'total_prefixes': '4'}
+
+
+@patch('syslog.syslog')
+def test_globals_statistics_that_are_not_json_leave_out_the_paths(mocked_syslog, bgp_mon):
+    """FRR answers an unknown VRF in plain text."""
+    replies = {'show bgp vrf all summary json': (0, json.dumps({"Vrf_x": GLOBALS_SUMMARY_JSON})),
+               'show bgp vrf Vrf_x statistics-all json': (0, "View/Vrf Vrf_x is unknown")}
+    with patch('bgpmon.bgpmon.getstatusoutput_noshell', side_effect=lambda cmd: replies[cmd[-1]]):
+        assert bgp_mon.get_all_globals_applied_states() is True
+    assert 'total_paths' not in bgp_mon.new_globals_applied_state["Vrf_x"]
+
+
 # 'show bgp peer-group json' as FRR 10.5 prints it: a group with a remote AS and
 # a member, one with two families activated, and one with neither.
 PEER_GROUP_JSON = {
