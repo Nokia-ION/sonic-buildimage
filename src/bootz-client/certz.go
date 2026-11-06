@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"time"
 
 	bpb "github.com/openconfig/bootz/proto/bootz"
 	certz "github.com/openconfig/gnsi/certz"
@@ -41,6 +42,13 @@ const (
 	gnxiCertFile       = telemetryCertDir + "/server_crt.cer"
 	gnxiKeyFile        = telemetryCertDir + "/server_key.key"
 	gnxiCAFile         = telemetryCertDir + "/ca_crt.cer"
+
+	// Installing Bootz certz profiles first copies telemetryCertDir here, to
+	// telemetry_<UTC time>. It is on /host, so the copies outlive image
+	// installs and factory resets. They hold private keys.
+	telemetryBackupDir    = "/host/bootz_backup"
+	telemetryBackupPrefix = "telemetry_"
+	telemetryBackupsKept  = 10
 
 	// Owner certs that the gNMI server's EnrollZ service installs.
 	oIDevIDCertFile = telemetryCertDir + "/oIDevID_cert.pem"
@@ -425,6 +433,14 @@ func InstallCertzProfiles() error {
 		return fmt.Errorf("read %s: %w", PendingCertzDir, err)
 	}
 
+	backup, err := backupTelemetryDir()
+	if err != nil {
+		return err
+	}
+	if backup != "" {
+		slog.Info("backed up the gNMI certificate directory", "path", telemetryCertDir, "backup", backup)
+	}
+
 	var installed []string
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -463,6 +479,43 @@ func InstallCertzProfiles() error {
 		slog.Warn("failed to restart gnmi", "err", err, "output", string(out))
 	}
 	return nil
+}
+
+// backupTelemetryDir copies telemetryCertDir into a new
+// telemetryBackupDir/telemetry_<UTC time> directory and keeps the newest
+// telemetryBackupsKept copies. It returns the copy, or "" if there is no
+// telemetryCertDir.
+func backupTelemetryDir() (string, error) {
+	if _, err := os.Stat(telemetryCertDir); os.IsNotExist(err) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(telemetryBackupDir, 0700); err != nil {
+		return "", fmt.Errorf("create %s: %w", telemetryBackupDir, err)
+	}
+	backup := filepath.Join(telemetryBackupDir, telemetryBackupPrefix+time.Now().UTC().Format("20060102T150405.000Z"))
+	if err := os.Mkdir(backup, 0700); err != nil {
+		return "", fmt.Errorf("create %s: %w", backup, err)
+	}
+	// cp -a keeps the key file modes and the Certz symlinks.
+	if out, err := exec.Command("cp", "-a", telemetryCertDir+"/.", backup).CombinedOutput(); err != nil {
+		os.RemoveAll(backup)
+		return "", fmt.Errorf("back up %s to %s: %w (output: %s)", telemetryCertDir, backup, err, out)
+	}
+
+	backups, err := filepath.Glob(filepath.Join(telemetryBackupDir, telemetryBackupPrefix+"*"))
+	if err != nil {
+		slog.Warn("failed to list gNMI certificate backups", "path", telemetryBackupDir, "err", err)
+	}
+	sort.Strings(backups)
+	for len(backups) > telemetryBackupsKept {
+		if err := os.RemoveAll(backups[0]); err != nil {
+			slog.Warn("failed to remove old gNMI certificate backup", "path", backups[0], "err", err)
+		}
+		backups = backups[1:]
+	}
+	return backup, nil
 }
 
 func readStagedProfile(id string) (*stagedProfile, error) {
