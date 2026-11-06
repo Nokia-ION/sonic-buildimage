@@ -863,15 +863,17 @@ class BgpStateGet:
     # Take a new snapshot of the applied neighbor configuration. Returns True
     # only when the snapshot is usable, so a failed scrape cannot be mistaken
     # for "FRR reports no neighbors" and wipe the table.
-    def build_globals_applied_fields(self, vrf_summary):
-        """Map one vrf's summary JSON onto BGP_GLOBALS_APPLIED fields."""
+    def build_globals_applied_fields(self, vrf_summary, vrf_stats=None):
+        """Map one vrf's summary JSON, and its table statistics JSON when there
+        is one, onto BGP_GLOBALS_APPLIED fields. A count FRR reported is
+        published even when it is 0; one it did not report is left out."""
         if not isinstance(vrf_summary, dict):
             return {}
         fields = {}
         router_id = vrf_summary.get('routerId')
         asn = vrf_summary.get('as')
-        total_pfx = 0
-        total_paths = 0
+        total_pfx = None
+        total_paths = None
         for af_key in ('ipv4Unicast', 'ipv6Unicast'):
             af = vrf_summary.get(af_key)
             if not isinstance(af, dict):
@@ -888,19 +890,62 @@ class BgpStateGet:
             if tr is None:
                 tr = af.get('ribCount')
             if tr is not None:
-                total_pfx += int(tr)
+                total_pfx = (total_pfx or 0) + int(tr)
             tp = af.get('totalPaths')
             if tp is not None:
-                total_paths += int(tp)
+                total_paths = (total_paths or 0) + int(tp)
+        stats_paths = self.globals_stats_total_paths(vrf_stats)
+        if stats_paths is not None:
+            total_paths = stats_paths
         if router_id:
             fields['router_id'] = str(router_id)
         if asn is not None:
             fields['local_asn'] = str(asn)
-        if total_pfx:
+        if total_pfx is not None:
             fields['total_prefixes'] = str(total_pfx)
-        if total_paths:
+        if total_paths is not None:
             fields['total_paths'] = str(total_paths)
         return fields
+
+    # FRR's summary carries no path count. Its table statistics count every
+    # path of every prefix as an advertisement, from one walk of the table
+    # rather than a dump of the routes.
+    @staticmethod
+    def globals_stats_total_paths(vrf_stats):
+        if not isinstance(vrf_stats, dict):
+            return None
+        total = None
+        for af_key in ('ipv4Unicast', 'ipv6Unicast'):
+            entries = vrf_stats.get(af_key)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get('totalAdvertisements') is not None:
+                    total = (total or 0) + int(entry['totalAdvertisements'])
+        return total
+
+    # One call per VRF, the default instance asked for without a vrf, as the
+    # peer-group pass does. A VRF whose statistics cannot be read keeps the
+    # rest of its row; only the path count is left out.
+    def get_globals_table_stats(self, vrf):
+        if vrf == "default":
+            cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp statistics-all json']
+        else:
+            cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp vrf %s statistics-all json' % vrf]
+        try:
+            rc, output = getstatusoutput_noshell(cmd)
+            if rc:
+                syslog.syslog(syslog.LOG_WARNING,
+                              "*WARNING* Failed with rc:{} when execute: {}".format(rc, cmd))
+                return None
+            if len(output) == 0:
+                syslog.syslog(syslog.LOG_WARNING, "*WARNING* output none when execute: {}".format(cmd))
+                return None
+            return json.loads(output)
+        except Exception as e:
+            syslog.syslog(syslog.LOG_WARNING,
+                          "*WARNING* An unexpected error occurred: {} when execute: {}".format(e, cmd))
+            return None
 
     def get_all_globals_applied_states(self):
         cmd = ["vtysh", "-H", "/dev/null", "-c", 'show bgp vrf all summary json']
@@ -923,7 +968,7 @@ class BgpStateGet:
         for vrf, vrf_dict in vrf_info.items():
             if not isinstance(vrf_dict, dict):
                 continue
-            fields = self.build_globals_applied_fields(vrf_dict)
+            fields = self.build_globals_applied_fields(vrf_dict, self.get_globals_table_stats(vrf))
             if fields:
                 self.new_globals_applied_state[vrf] = fields
         return True
