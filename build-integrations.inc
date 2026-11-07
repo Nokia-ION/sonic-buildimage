@@ -82,6 +82,14 @@ apply_submodule_integrations() {
 
   #[intfmgrd] Source STATE_DB interface addresses from netlink, including kernel link-local
   _submodule_add src/sonic-swss shivangi_swss https://github.com/shivjain-nokia/sonic-swss.git 9f1c886b
+
+  # Revert the SAI v1.19.2 headers: the Broadcom SAI is built for 1.18.1 and the larger
+  # sai_attribute_t breaks switch create (syncd "Error retreiving system mac").
+  # https://github.com/sonic-net/sonic-buildimage/issues/30526
+  # https://github.com/sonic-net/sonic-sairedis/pull/2170
+  # The revert moves the nested SAI gitlink, so check SAI out again.
+  _submodule_add src/sonic-sairedis sonic-sairedis https://github.com/sonic-net/sonic-sairedis pr/2170
+  git -C src/sonic-sairedis submodule update --init SAI
 }
 
 apply_patch_files() {
