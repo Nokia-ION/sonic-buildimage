@@ -31,7 +31,7 @@ apply_submodule_integrations() {
   _submodule_add src/sonic-swss bala_swss https://github.com/balanokia/sonic-swss 9bd9d5d
 
   #https://github.com/satyprak-nokia/sonic-swss/pull/stp
-  _submodule_add src/sonic-swss satyprak_swss https://github.com/satyprak-nokia/sonic-swss f6fb4c1^..c89203b
+  _submodule_add src/sonic-swss satyprak_swss https://github.com/satyprak-nokia/sonic-swss f6fb4c1^..29a978d
 
   #https://github.com/vganesan-nokia/sonic-swss/tree/oc-routing
   _submodule_add src/sonic-swss github-vganesan-nokia-sonic-swss https://github.com/vganesan-nokia/sonic-swss.git 5ec4649^..983abe5
