@@ -832,6 +832,13 @@ class BgpStateGet:
             if threshold is not None:
                 fields['warning_threshold_pct'] = str(threshold)
 
+        # How many times FRR accepts the local AS in a received path, present
+        # only while allowas-in is configured with a count; its origin form has
+        # no count and is not published.
+        allow_own_as = frr_uint(af_info.get('allowAsInCount'))
+        if allow_own_as is not None:
+            fields['allow_own_as'] = str(allow_own_as)
+
         return fields
 
     def update_new_af_stats_states(self, vrf, peer, peer_info):

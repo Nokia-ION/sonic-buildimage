@@ -661,6 +661,15 @@ def test_af_stats_send_community_and_prefix_limit(bgp_mon):
                       'prevent_teardown': 'true', 'warning_threshold_pct': '80'}
 
 
+def test_af_stats_allow_own_as(bgp_mon):
+    """The allowas-in count FRR applies is mapped; its origin form, which has
+    no count, is not."""
+    assert bgp_mon.build_af_stats_fields({"acceptedPrefixCounter": 0, "allowAsInCount": 3}) == {
+        'prefixes_received': '0', 'allow_own_as': '3'}
+    assert bgp_mon.build_af_stats_fields({"acceptedPrefixCounter": 0, "allowAsInOrigin": True}) == {
+        'prefixes_received': '0'}
+
+
 def test_af_stats_no_prefix_limit_and_no_communities(bgp_mon):
     """A family with no limit and no community sent reports neither."""
     fields = bgp_mon.build_af_stats_fields({"commAttriSentToNbr": "", "acceptedPrefixCounter": 0})
