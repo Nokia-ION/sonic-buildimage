@@ -29,6 +29,7 @@ apply_submodule_integrations() {
   _submodule_add src/sonic-swss bala_swss https://github.com/balanokia/sonic-swss b43dfa8
   _submodule_add src/sonic-swss bala_swss https://github.com/balanokia/sonic-swss 1ad9c46
   _submodule_add src/sonic-swss bala_swss https://github.com/balanokia/sonic-swss 9bd9d5d
+  _submodule_add src/sonic-swss bala_swss https://github.com/balanokia/sonic-swss 77f59a0
 
   #https://github.com/satyprak-nokia/sonic-swss/pull/stp
   _submodule_add src/sonic-swss satyprak_swss https://github.com/satyprak-nokia/sonic-swss f6fb4c1^..29a978d
