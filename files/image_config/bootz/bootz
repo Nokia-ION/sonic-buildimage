@@ -17,7 +17,7 @@ log() {
 }
 
 usage() {
-    echo "Usage: $0 {boot|report|provision|shut}" >&2
+    echo "Usage: $0 {boot|report|provision}" >&2
     exit 1
 }
 
@@ -118,19 +118,17 @@ cmd_boot() {
         report_args=("error:Booted installed image but the vendor config was not applied")
     fi
 
-    if [[ ! -f "$BOOTZ_PENDING_REPORT" ]] && ! check_config; then
-        log "$BOOTZ_CONFIG not present, skipping boot"
-	if grep -iq "SONiC" /etc/os-release 2>/dev/null; then
-	    exit 1
-	else
-	    exit 0
-	fi
+    # BOOTZ_CONFIG stays on /host after provisioning, so it does not mean a report is due.
+    if [[ ! -f "$BOOTZ_PENDING_REPORT" && ${#report_args[@]} -eq 0 ]]; then
+        log "$BOOTZ_PENDING_REPORT not present, skipping boot report"
+        exit 0
     fi
 
+    # The server may only be reachable over inband ports, which need swss and bgp.
     log "starting boot report in the background as $BOOTZ_REPORT_UNIT.service"
     systemd-run --no-block --collect --unit="$BOOTZ_REPORT_UNIT" \
         --description="BootZ boot status report" \
-        --property=After=interfaces-config.service \
+        --property="After=interfaces-config.service swss.service bgp.service" \
         --property=StandardOutput=journal+console \
         --property=StandardError=journal+console \
         "$BOOTZ_WRAPPER" report "${report_args[@]}"
@@ -147,18 +145,22 @@ cmd_report() {
         exit 0
     fi
 
+    if [[ -z "$1" ]]; then
+        log "no pending report and no message, nothing to report"
+        exit 0
+    fi
+
     if ! check_config; then
         log "$BOOTZ_CONFIG not present, nothing to report"
         exit 0
     fi
 
-    local -a bootz_args ntp_args msg_args=()
+    local -a bootz_args ntp_args
     bootz_addr_args bootz_args
     ntp_addr_args ntp_args
-    [[ -n "$1" ]] && msg_args=("--report-message" "$1")
 
-    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode report ${msg_args[*]}"
-    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode report "${msg_args[@]}"
+    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode report --report-message $1"
+    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode report --report-message "$1"
     local exit_code=$?
     check_status "$exit_code"
     log "bootz report command succeeded"
@@ -185,21 +187,6 @@ cmd_provision() {
     log "bootz provision command succeeded"
 }
 
-cmd_shut() {
-    if ! check_config; then
-        exit 0
-    fi
-
-    local -a bootz_args ntp_args
-    bootz_addr_args bootz_args
-    ntp_addr_args ntp_args
-    log "starting bootz-client --verbose ${bootz_args[*]} ${ntp_args[*]} --mode report --report-message \"Shutting down\" --report-status info"
-    "$BOOTZ_CLIENT" --verbose "${bootz_args[@]}" "${ntp_args[@]}" --mode report --report-message "Shutting down" --report-status info
-    local exit_code=$?
-    check_status "$exit_code"
-    log "bootz report shut command succeeded"
-}
-
 case "$1" in
     boot)
         cmd_boot
@@ -210,9 +197,6 @@ case "$1" in
         ;;
     provision)
         cmd_provision
-        ;;
-    shut)
-        cmd_shut
         ;;
     *)
         usage

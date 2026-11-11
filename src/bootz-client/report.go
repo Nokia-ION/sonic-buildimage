@@ -154,9 +154,9 @@ func sendReportStatus(
 // ReportInfoStatus is a helper function that sends an informational status
 // message to the Bootz server.
 //
-// It uses BOOTSTRAP_STATUS_UNSPECIFIED and CONTROL_CARD_STATUS_UNINITIALIZED
-// as defaults, making it suitable for progress updates that do not
-// signify a final success or failure state.
+// It uses BOOTSTRAP_STATUS_INITIATED and CONTROL_CARD_STATUS_NOT_INITIALIZED,
+// making it suitable for progress updates that do not signify a final
+// success or failure state.
 func (bc *BootzContext) ReportInfoStatus(format string, args ...any) error {
 	msg := format
 	if len(args) > 0 {
@@ -164,7 +164,7 @@ func (bc *BootzContext) ReportInfoStatus(format string, args ...any) error {
 	}
 	req := buildReportStatusRequest(
 		bc.chassis,
-		bpb.ReportStatusRequest_BOOTSTRAP_STATUS_UNSPECIFIED,
+		bpb.ReportStatusRequest_BOOTSTRAP_STATUS_INITIATED,
 		msg,
 		bpb.ControlCardState_CONTROL_CARD_STATUS_NOT_INITIALIZED,
 	)
@@ -254,7 +254,7 @@ func resolveStatus(level string) (bpb.ReportStatusRequest_BootstrapStatus, bpb.C
 	case StatusInfo:
 		fallthrough
 	default:
-		return bpb.ReportStatusRequest_BOOTSTRAP_STATUS_UNSPECIFIED, bpb.ControlCardState_CONTROL_CARD_STATUS_UNSPECIFIED
+		return bpb.ReportStatusRequest_BOOTSTRAP_STATUS_INITIATED, bpb.ControlCardState_CONTROL_CARD_STATUS_NOT_INITIALIZED
 	}
 }
 
@@ -297,15 +297,10 @@ func runReporting(ctx context.Context,
 	controlCard.Status = cStatus
 	firstReq := buildReportStatusRequest(chassis, bStatus, msg, cStatus)
 
+	// The server records the report that opens the stream, so it must not be sent again.
 	stream, err := sendReportStream(ctx, cfg, client, firstReq)
 	if err != nil {
 		return err
-	}
-
-	// The OpenConfig server treats the report that opens a stream as a re-authentication
-	// request and does not store its status, so send it again on the authenticated stream.
-	if err := sendReportStatus(stream, buildReportStatusRequest(chassis, bStatus, msg, cStatus)); err != nil {
-		return fmt.Errorf("failed to send message %s: %w", msg, err)
 	}
 
 	// iterate over the remaining messages, sending each in turn
