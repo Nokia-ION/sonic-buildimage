@@ -839,6 +839,16 @@ class BgpStateGet:
         if allow_own_as is not None:
             fields['allow_own_as'] = str(allow_own_as)
 
+        # The AS path rewrites FRR applies on the family's outbound updates:
+        # as-override, and private AS removal in its all forms. The forms that
+        # act only on a path made of private ASes alone are not published.
+        if af_info.get('overrideASNsInOutboundUpdates'):
+            fields['as_override'] = 'true'
+        if af_info.get('privateAsNumsAllReplacedInUpdatesToNbr'):
+            fields['remove_private_as'] = 'PRIVATE_AS_REPLACE_ALL'
+        elif af_info.get('privateAsNumsAllRemovedInUpdatesToNbr'):
+            fields['remove_private_as'] = 'PRIVATE_AS_REMOVE_ALL'
+
         return fields
 
     def update_new_af_stats_states(self, vrf, peer, peer_info):

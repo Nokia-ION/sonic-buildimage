@@ -670,6 +670,18 @@ def test_af_stats_allow_own_as(bgp_mon):
         'prefixes_received': '0'}
 
 
+def test_af_stats_as_override_and_remove_private_as(bgp_mon):
+    """as-override and the all forms of private AS removal are mapped; the
+    forms acting only on an all-private path are not."""
+    assert bgp_mon.build_af_stats_fields({"acceptedPrefixCounter": 0, "overrideASNsInOutboundUpdates": "ifAspathEqualRemoteAs",
+                                          "privateAsNumsAllRemovedInUpdatesToNbr": True}) == {
+        'prefixes_received': '0', 'as_override': 'true', 'remove_private_as': 'PRIVATE_AS_REMOVE_ALL'}
+    assert bgp_mon.build_af_stats_fields({"acceptedPrefixCounter": 0, "privateAsNumsAllReplacedInUpdatesToNbr": True}) == {
+        'prefixes_received': '0', 'remove_private_as': 'PRIVATE_AS_REPLACE_ALL'}
+    for form in ("privateAsNumsRemovedInUpdatesToNbr", "privateAsNumsReplacedInUpdatesToNbr"):
+        assert bgp_mon.build_af_stats_fields({"acceptedPrefixCounter": 0, form: True}) == {'prefixes_received': '0'}
+
+
 def test_af_stats_no_prefix_limit_and_no_communities(bgp_mon):
     """A family with no limit and no community sent reports neither."""
     fields = bgp_mon.build_af_stats_fields({"commAttriSentToNbr": "", "acceptedPrefixCounter": 0})
