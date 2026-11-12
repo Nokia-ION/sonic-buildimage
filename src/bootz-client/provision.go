@@ -229,18 +229,6 @@ func (bc *BootzContext) processBootstrapConfig(
 		}
 	}
 
-	if certzProfiles > 0 {
-		if bc.imageInstalled && cfg.ImageFile == "" {
-			slog.Info("certz profiles will be installed by the new image on first boot",
-				"path", PendingCertzDir)
-		} else {
-			if err := InstallCertzProfiles(); err != nil {
-				return fmt.Errorf("failed to install certz profiles: %w", err)
-			}
-			bc.ReportInfoStatus("Installed %d certz profile(s)", certzProfiles)
-		}
-	}
-
 	// Vendor config is only attribute of interest (for now)
 	config := bc.vendorConfig
 	configLen := len(config)
@@ -280,6 +268,23 @@ func (bc *BootzContext) processBootstrapConfig(
 			}
 		} else {
 			slog.Info("skipping config installed, no config installer configured")
+		}
+	}
+
+	// A vendor config rejected on the next boot restores the config from
+	// before provisioning, so its certz profiles must not be installed before.
+	if certzProfiles > 0 {
+		if bc.imageInstalled && cfg.ImageFile == "" {
+			slog.Info("certz profiles will be installed by the new image on first boot",
+				"path", PendingCertzDir)
+		} else if bc.stagedVendorConfig != "" {
+			slog.Info("certz profiles will be installed on the next boot if the vendor config is applied",
+				"path", PendingCertzDir)
+		} else {
+			if err := InstallCertzProfiles(); err != nil {
+				return fmt.Errorf("failed to install certz profiles: %w", err)
+			}
+			bc.ReportInfoStatus("Installed %d certz profile(s)", certzProfiles)
 		}
 	}
 

@@ -2,7 +2,9 @@
 #
 # Factory default hook: deep merge the vendor config that bootz-client staged
 # for this image into the generated factory default config. The vendor config
-# wins where both set a value.
+# wins where both set a value, and a null value removes the key from the
+# factory default config (JSON Merge Patch, RFC 7386), for example
+# "VLAN_MEMBER": {"Vlan1000|Ethernet0": null} to make Ethernet0 a routed port.
 #
 # If the vendor config cannot be merged, or the merged config fails the YANG
 # validation of config reload, the config_db.json that bootz-client backed up
@@ -27,6 +29,20 @@ sys.exit(0 if valid else 1)
 EOF
 }
 
+# Usage: bootz_merge_patch <config_db.json> <vendor_config.json>
+bootz_merge_patch()
+{
+    jq --indent 4 -s '
+        def merge_patch($patch):
+            if ($patch | type) == "object" then
+                reduce ($patch | to_entries[]) as $e
+                    (if type == "object" then . else {} end;
+                     if $e.value == null then del(.[$e.key])
+                     else .[$e.key] |= merge_patch($e.value) end)
+            else $patch end;
+        .[1] as $patch | .[0] | merge_patch($patch)' "$1" "$2"
+}
+
 bootz_merge_vendor_config()
 {
     local version bootz_dir vendor_config previous_config dest tmp reason=""
@@ -47,7 +63,7 @@ bootz_merge_vendor_config()
     elif [ ! -e "$dest" ] && ! sonic-cfggen -H -k ${HW_KEY} --preset ${DEFAULT_PRESET} > "$dest"; then
         rm -f "$dest"
         reason="generating the factory default config failed"
-    elif ! jq --indent 4 -s '.[0] * .[1]' "$dest" "$vendor_config" > "$tmp"; then
+    elif ! bootz_merge_patch "$dest" "$vendor_config" > "$tmp"; then
         reason="merging it into the factory default config failed"
     elif ! bootz_validate_config "$tmp"; then
         reason="the merged config fails YANG validation"

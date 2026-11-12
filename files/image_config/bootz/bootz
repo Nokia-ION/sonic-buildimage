@@ -99,21 +99,30 @@ report_pending() {
 cmd_boot() {
     local -a report_args=()
 
+    # Renamed by the config-setup hook 90-bootz-vendor-config, which restores
+    # the config from before provisioning, if there was one, instead.
+    local version vendor_config_rejected=false
+    version=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version 2>/dev/null)
+    if [[ -f "/host/image-${version}/bootz/vendor_config.json.rejected" ]]; then
+        vendor_config_rejected=true
+    fi
+
     # Must finish before gnmi.service starts, which is ordered after sonic.target.
     if [[ -d "$BOOTZ_PENDING_CERTZ" ]]; then
-        log "installing certz profiles staged in $BOOTZ_PENDING_CERTZ"
-        if ! "$BOOTZ_CLIENT" --verbose --mode install-certz; then
-            log "failed to install certz profiles"
-            report_args=("error:Booted installed image but failed to install certz profiles")
+        if [[ "$vendor_config_rejected" == true ]]; then
+            # The restored config keeps the certificates it was used with.
+            log "the vendor config was not applied, discarding the certz profiles staged in $BOOTZ_PENDING_CERTZ"
+            rm -rf "$BOOTZ_PENDING_CERTZ"
+        else
+            log "installing certz profiles staged in $BOOTZ_PENDING_CERTZ"
+            if ! "$BOOTZ_CLIENT" --verbose --mode install-certz; then
+                log "failed to install certz profiles"
+                report_args=("error:Booted installed image but failed to install certz profiles")
+            fi
         fi
     fi
 
-    # Renamed by the config-setup hook 90-bootz-vendor-config, which restores
-    # the config from before provisioning, if there was one, instead.
-    local version
-    version=$(sonic-cfggen -y /etc/sonic/sonic_version.yml -v build_version 2>/dev/null)
-    if [[ -f "$BOOTZ_PENDING_REPORT" && ${#report_args[@]} -eq 0 &&
-          -f "/host/image-${version}/bootz/vendor_config.json.rejected" ]]; then
+    if [[ -f "$BOOTZ_PENDING_REPORT" && ${#report_args[@]} -eq 0 && "$vendor_config_rejected" == true ]]; then
         log "the vendor config was not applied, see the config-setup log"
         report_args=("error:Booted installed image but the vendor config was not applied")
     fi
