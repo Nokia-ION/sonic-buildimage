@@ -40,6 +40,7 @@ apply_submodule_integrations() {
   #https://github.com/satyprak-nokia/sonic-stp/pull/stp
   # 7d59528 (root port election) is upstream as https://github.com/sonic-net/sonic-stp/pull/102
   _submodule_add src/sonic-stp satyprak_stp https://github.com/satyprak-nokia/sonic-stp e34e9d6^..c45fee7
+  _submodule_add src/sonic-stp satyprak_stp https://github.com/satyprak-nokia/sonic-stp 706502f
 
   #https://github.com/balanokia/sonic-utilities/pull/vrrp
   _submodule_add src/sonic-utilities bala_utilities https://github.com/balanokia/sonic-utilities ebf36b0
