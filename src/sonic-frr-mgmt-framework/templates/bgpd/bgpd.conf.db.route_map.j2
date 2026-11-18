@@ -19,7 +19,20 @@ route-map {{rm_key[0]}} {{rm_val['route_operation']}} {{rm_key[1]}}
  match interface {{rm_val['match_interface']}}
 {% endif %}
 {% if 'match_tag' in rm_val %}
- match tag {{rm_val['match_tag'][0]}}
+{% set tag_ns = namespace(tag=rm_val['match_tag']) %}
+{% if tag_ns.tag is not string %}
+{% set tag_ns.tag = tag_ns.tag[0] if tag_ns.tag|length > 0 else '' %}
+{% endif %}
+{% if not tag_ns.tag.isdigit() %}
+{% if TAG_SET is defined and tag_ns.tag in TAG_SET and TAG_SET[tag_ns.tag].get('tag_value', [])|length == 1 %}
+{% set tag_ns.tag = TAG_SET[tag_ns.tag]['tag_value'][0] %}
+{% else %}
+{% set tag_ns.tag = '' %}
+{% endif %}
+{% endif %}
+{% if tag_ns.tag != '' %}
+ match tag {{tag_ns.tag}}
+{% endif %}
 {% endif %}
 {% if 'match_src_vrf' in rm_val %}
  match source-vrf {{rm_val['match_src_vrf']}}
@@ -42,6 +55,9 @@ route-map {{rm_key[0]}} {{rm_val['route_operation']}} {{rm_key[1]}}
 {% endfor %}
 {% endif %}
 {% endif %}
+{% if 'match_ipv6_prefix_set' in rm_val %}
+ match ipv6 address prefix-list {{rm_val['match_ipv6_prefix_set']}}
+{% endif %}
 {# ---------------match ip/ipv6-  End-------------------------- #}
 {% if 'match_local_pref' in rm_val %}
  match local-preference {{rm_val['match_local_pref']}}
@@ -59,15 +75,11 @@ route-map {{rm_key[0]}} {{rm_val['route_operation']}} {{rm_key[1]}}
  match source-protocol {{rm_val['match_protocol']}}
 {% endif %}
 {# ---------------set as-path prepend - Start ----------------- #}
-{% if 'set_asn' in rm_val and 'set_repeat_asn' in rm_val %}
-{% set ns = namespace(as_str='') %}
-{% if rm_val['set_repeat_asn'] > 0 %}
-{% for i in range(rm_val['set_repeat_asn']|int) %}
+{% if 'set_asn' in rm_val %}
+{% set ns = namespace(as_str='', repeat=rm_val.get('set_repeat_asn', '1')|int) %}
+{% for i in range(ns.repeat if ns.repeat > 0 else 1) %}
 {% set ns.as_str = ns.as_str+' '+rm_val['set_asn'] %}
 {% endfor %}
-{% else %}
-{% set ns.as_str = rm_val['set_asn'] %}
-{% endif %}
  set as-path prepend{{ns.as_str}}
 {% endif %}
 {# ---------------set as-path prepend - End ------------------- #}
@@ -80,8 +92,12 @@ route-map {{rm_key[0]}} {{rm_val['route_operation']}} {{rm_key[1]}}
  set community{{ns.comms}}
 {% endif %}
 {# ---------------set community - End-------------------------- #}
-{% if 'set_community_ref' in rm_val %}
- set community {{rm_val['set_community_ref']}}
+{% if 'set_community_ref' in rm_val and COMMUNITY_SET is defined and rm_val['set_community_ref'] in COMMUNITY_SET %}
+{% set cs = COMMUNITY_SET[rm_val['set_community_ref']] %}
+{% if 'set_type' in cs and 'match_action' in cs and cs.get('community_member', [])|length > 0 %}
+{% set cs_add = ' additive' if rm_val.get('set_community_ref_additive', 'false')|lower == 'true' else '' %}
+ set community {{cs['community_member']|sort|join(' ')}}{{cs_add}}
+{% endif %}
 {% endif %}
 {# ---------------set extcommunity - Start--------------------- #}
 {% if 'set_ext_community_inline' in rm_val %}
@@ -99,15 +115,35 @@ route-map {{rm_key[0]}} {{rm_val['route_operation']}} {{rm_key[1]}}
  set extcommunity rt{{ec_ns.rt_str}}
 {% endif %}
 {% if ec_ns.soo_str != '' %}
- set extcommunity soo{{ec_ns.rt_str}}
+ set extcommunity soo{{ec_ns.soo_str}}
 {% endif %}
 {% endif %}
 {# ---------------set extcommunity - End----------------------- #}
-{% if 'set_ext_community_ref' in rm_val %}
- set extcommunity {{rm_val['set_ext_community_ref']}}
+{% if 'set_ext_community_ref' in rm_val and EXTENDED_COMMUNITY_SET is defined and rm_val['set_ext_community_ref'] in EXTENDED_COMMUNITY_SET %}
+{% set ecs = EXTENDED_COMMUNITY_SET[rm_val['set_ext_community_ref']] %}
+{% if 'set_type' in ecs and 'match_action' in ecs and ecs.get('community_member', [])|length > 0 %}
+{% set ecr_ns = namespace(rt_str='', soo_str='') %}
+{% for ext_comm in ecs['community_member']|sort %}
+{% if ext_comm.startswith('route-target:') %}
+{% set ecr_ns.rt_str = ecr_ns.rt_str + ' ' + ext_comm[13:] %}
+{% elif ext_comm.startswith('route-origin:') %}
+{% set ecr_ns.soo_str = ecr_ns.soo_str + ' ' + ext_comm[13:] %}
+{% endif %}
+{% endfor %}
+{% if ecr_ns.rt_str != '' %}
+ set extcommunity rt{{ecr_ns.rt_str}}
+{% endif %}
+{% if ecr_ns.soo_str != '' %}
+ set extcommunity soo{{ecr_ns.soo_str}}
+{% endif %}
+{% endif %}
 {% endif %}
 {% if 'set_next_hop' in rm_val %}
+{% if rm_val['set_next_hop']|lower == 'self' %}
+ set ip next-hop peer-address
+{% else %}
  set ip next-hop {{rm_val['set_next_hop']}}
+{% endif %}
 {% endif %}
 {% if 'set_ipv6_next_hop_global' in rm_val %}
  set ipv6 next-hop global {{rm_val['set_ipv6_next_hop_global']}}
@@ -115,8 +151,11 @@ route-map {{rm_key[0]}} {{rm_val['route_operation']}} {{rm_key[1]}}
 {% if 'set_ipv6_next_hop_prefer_global' in rm_val and rm_val['set_ipv6_next_hop_prefer_global'] == 'true' %}
  set ipv6 next-hop prefer-global
 {% endif %}
-{% if 'set_local_preference' in rm_val %}
- set local-preference {{rm_val['set_local_preference']}}
+{% if 'set_local_pref' in rm_val %}
+ set local-preference {{rm_val['set_local_pref']}}
+{% endif %}
+{% if 'set_tag' in rm_val %}
+ set tag {{rm_val['set_tag']}}
 {% endif %}
 {# ---------------set metric and med - Start--------------------- #}
 {% if 'set_metric_action' in rm_val %}
