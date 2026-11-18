@@ -56,6 +56,22 @@ router bgp {{ bgp_sess['local_asn']}} vrf {{ vrf }}
 {% else %}
  no bgp default ipv4-unicast
 {% endif %}
+{% if 'default_ipv6_unicast' in bgp_sess and bgp_sess['default_ipv6_unicast'] == 'true' %}
+ bgp default ipv6-unicast
+{% endif %}
+{% if 'keepalive' in bgp_sess and 'holdtime' in bgp_sess %}
+ timers bgp {{bgp_sess['keepalive']}} {{bgp_sess['holdtime']}}
+{% endif %}
+{% if 'max_ebgp_paths' in bgp_sess %}
+ maximum-paths {{bgp_sess['max_ebgp_paths']}}
+{% endif %}
+{% if 'max_ibgp_paths' in bgp_sess %}
+{% if 'ibgp_equal_cluster_length' in bgp_sess and bgp_sess['ibgp_equal_cluster_length'] == 'true' %}
+ maximum-paths ibgp {{bgp_sess['max_ibgp_paths']}} equal-cluster-length
+{% else %}
+ maximum-paths ibgp {{bgp_sess['max_ibgp_paths']}}
+{% endif %}
+{% endif %}
 {% if 'default_local_preference' in bgp_sess %}
  bgp default local-preference {{bgp_sess['default_local_preference']}}
 {% endif %}

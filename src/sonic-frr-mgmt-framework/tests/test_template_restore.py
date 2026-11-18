@@ -25,9 +25,12 @@ CONFIG_DB = {
                     'always_compare_med': 'true', 'external_compare_router_id': 'true',
                     'ignore_as_path_length': 'true', 'graceful_restart_enable': 'true',
                     'gr_restart_time': '120', 'gr_stale_routes_time': '360',
-                    'default_ipv4_unicast': 'false',
-                    'confed_id': '100', 'confed_peers': ['65101', '65102']},
-        'Vrf_red': {'local_asn': '65200', 'router_id': '11.0.1.64'},
+                    'default_ipv4_unicast': 'false', 'default_ipv6_unicast': 'false',
+                    'max_ebgp_paths': '4', 'max_ibgp_paths': '8',
+                    'confed_id': '100', 'confed_peers': ['65101', '65102'],
+                    'keepalive': '30', 'holdtime': '90'},
+        'Vrf_red': {'local_asn': '65200', 'router_id': '11.0.1.64',
+                    'default_ipv6_unicast': 'true'},
     },
     'BGP_GLOBALS_AF': {
         'default|ipv4_unicast': {'max_ebgp_paths': '4', 'max_ibgp_paths': '2',
@@ -124,7 +127,8 @@ CONFIG_DB = {
         'default|static|bgp|ipv6': {},
     },
     'BGP_GLOBALS_AF_AGGREGATE_ADDR': {
-        'default|ipv4_unicast|10.1.0.0/16': {'as_set': 'true', 'summary_only': 'true'},
+        'default|ipv4_unicast|10.1.0.0/16': {'as_set': 'true', 'summary_only': 'true',
+                                             'policy': 'RM1'},
     },
     'BGP_GLOBALS_AF_NETWORK': {
         'default|ipv4_unicast|10.2.0.0/16': {'policy': 'RM1'},

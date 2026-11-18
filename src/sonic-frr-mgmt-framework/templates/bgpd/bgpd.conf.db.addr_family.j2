@@ -53,7 +53,10 @@
 {% set af_ag_ns.ag_end = 'as-set ' %}
 {% endif %}
 {% if 'summary_only' in af_ag_val and af_ag_val['summary_only'] == 'true' %}
-{% set af_ag_ns.ag_end = af_ag_ns.ag_end + 'summary-only' %}
+{% set af_ag_ns.ag_end = af_ag_ns.ag_end + 'summary-only ' %}
+{% endif %}
+{% if 'policy' in af_ag_val %}
+{% set af_ag_ns.ag_end = af_ag_ns.ag_end + 'route-map ' + af_ag_val['policy'] %}
 {% endif %}
   aggregate-address {{af_ag_key[2]}} {{af_ag_ns.ag_end}}
 {% endif %}
