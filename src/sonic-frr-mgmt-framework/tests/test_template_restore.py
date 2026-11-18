@@ -146,7 +146,8 @@ CONFIG_DB = {
     },
     'STATIC_ROUTE': {
         'default|10.50.0.0/16': {'nexthop': '11.0.0.155,11.0.0.157'},
-        'default|10.60.0.0/16': {'nexthop': '11.0.0.155', 'distance': '10', 'tag': '5'},
+        'default|10.60.0.0/16': {'nexthop': '11.0.0.155', 'distance': '10', 'tag': '5',
+                                 'bfd': 'true'},
         'default|10.70.0.0/16': {'blackhole': 'true', 'nexthop': '0.0.0.0'},
         'default|fc00:50::/64': {'nexthop': 'fc00::82,fc00::86'},
         'Vrf_red|10.80.0.0/16': {'nexthop': '11.0.1.155'},
