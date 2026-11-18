@@ -8,6 +8,9 @@
   no neighbor {{nbr_name}} activate
 {% endif %}
 {% endif %}
+{% if 'tx_add_best_path_count' in n_af_val %}
+  neighbor {{nbr_name}} addpath-tx-best-selected {{n_af_val['tx_add_best_path_count']}}
+{% endif %}
 {% if 'tx_add_paths' in n_af_val %}
 {% if n_af_val['tx_add_paths'] == 'tx_all_paths' %}
   neighbor {{nbr_name}} addpath-tx-all-paths
@@ -74,6 +77,9 @@
 {% set ns.mpfx_str = ns.mpfx_str + ' restart ' + n_af_val['max_prefix_restart_interval'] %}
 {% elif 'max_prefix_warning_only' in n_af_val and n_af_val['max_prefix_warning_only'] == 'true' %}
 {% set ns.mpfx_str = ns.mpfx_str + ' warning-only' %}
+{% endif %}
+{% if 'max_prefix_force' in n_af_val and n_af_val['max_prefix_force'] == 'true' %}
+{% set ns.mpfx_str = ns.mpfx_str + ' force' %}
 {% endif %}
   neighbor {{nbr_name}} {{ns.mpfx_str}}
 {% endif %}

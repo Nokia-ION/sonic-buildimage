@@ -25,7 +25,14 @@
  neighbor {{name_or_ip}} {{ns_intf.intf_arg}}peer-group {{nbr_or_peer['peer_group_name']}}
 {% endif %}
 {% if 'local_asn' in nbr_or_peer %}
- neighbor {{name_or_ip}} local-as {{nbr_or_peer['local_asn']}}
+{% set ns_las = namespace(flags='') %}
+{% if 'local_as_no_prepend' in nbr_or_peer and nbr_or_peer['local_as_no_prepend'] == 'true' %}
+{% set ns_las.flags = ns_las.flags + ' no-prepend' %}
+{% endif %}
+{% if 'local_as_replace_as' in nbr_or_peer and nbr_or_peer['local_as_replace_as'] == 'true' %}
+{% set ns_las.flags = ns_las.flags + ' replace-as' %}
+{% endif %}
+ neighbor {{name_or_ip}} local-as {{nbr_or_peer['local_asn']}}{{ns_las.flags}}
 {% endif %}
 {% if 'name' in nbr_or_peer %}
  neighbor {{name_or_ip}} description {{nbr_or_peer['name']}}
@@ -44,7 +51,7 @@
  neighbor {{name_or_ip}} ttl-security hops {{nbr_or_peer['ttl_security_hops']}}
 {% endif %}
 {% if 'auth_password' in nbr_or_peer %}
- neighbor {{name_or_ip}} password {{nbr_or_peer['auth_password']}} encrypted
+ neighbor {{name_or_ip}} password {{nbr_or_peer['auth_password']}}
 {% endif %}
 {% if 'solo_peer' in nbr_or_peer and nbr_or_peer['solo_peer'] == 'true' %}
  neighbor {{name_or_ip}} solo
@@ -85,6 +92,12 @@
 {% endif %}
 {% if 'conn_retry' in nbr_or_peer %}
  neighbor {{name_or_ip}} timers connect {{nbr_or_peer['conn_retry']}}
+{% endif %}
+{% if 'tcp_mss' in nbr_or_peer %}
+ neighbor {{name_or_ip}} tcp-mss {{nbr_or_peer['tcp_mss']}}
+{% endif %}
+{% if 'graceful_restart_enable' in nbr_or_peer and nbr_or_peer['graceful_restart_enable'] == 'true' %}
+ neighbor {{name_or_ip}} graceful-restart
 {% endif %}
 {% if 'capability_dynamic' in nbr_or_peer and nbr_or_peer['capability_dynamic'] == 'true' %}
  neighbor {{name_or_ip}} capability dynamic
