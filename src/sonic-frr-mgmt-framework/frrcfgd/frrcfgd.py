@@ -88,8 +88,10 @@ class BgpdClientMgr(threading.Thread):
             'PREFIX_SET': ['bgpd'],
             'COMMUNITY_SET': ['bgpd'],
             'EXTENDED_COMMUNITY_SET': ['bgpd'],
-            'ROUTE_MAP': ['zebra', 'bgpd', 'ospfd'],
-            'PREFIX': ['zebra', 'bgpd', 'ospfd', 'pimd'],
+            # every daemon holding route-maps and prefix-lists, as vtysh -b applies
+            # frr.conf to them; zebra's route-maps are held by mgmtd
+            'ROUTE_MAP': ['bgpd', 'ospfd', 'pimd', 'mgmtd'],
+            'PREFIX': ['zebra', 'bgpd', 'ospfd', 'pimd', 'vrrpd', 'mgmtd'],
             'BGP_PEER_GROUP': ['bgpd'],
             'BGP_NEIGHBOR': ['bgpd'],
             'BGP_PEER_GROUP_AF': ['bgpd'],
@@ -3363,11 +3365,7 @@ class BGPConfigDaemon:
                     if pfx_action is None or pfx_action.op == CachedDataWithOp.OP_NONE:
                         continue
                     af = self.prefix_set_list[pfx_set_name].af
-                    if af == socket.AF_INET:
-                        # use table daemons setting
-                        daemons = None
-                    else:
-                        daemons = ['bgpd', 'zebra']
+                    daemons = None
                     if pfx_action.op == CachedDataWithOp.OP_DELETE or pfx_action.op == CachedDataWithOp.OP_UPDATE:
                         del_pfx, pfx_idx = self.prefix_set_list[pfx_set_name].get_prefix(ip_pfx, len_range,
                                                                                          pfx_action.data, seq)

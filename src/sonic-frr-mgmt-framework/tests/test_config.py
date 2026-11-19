@@ -918,3 +918,39 @@ def test_aggregate_address_route_map(run_cmd):
     run_cmd.reset_mock()
     hdlr[tbl](tbl, 'default|ipv6_unicast|2001:db8::/32', None)
     assert aggregate_cmds(run_cmd)[-1].startswith('no aggregate-address 2001:db8::/32')
+
+@patch.dict('sys.modules', **mockmapping)
+def test_route_map_and_prefix_list_daemons():
+    """Route-map and prefix-list commands reach every daemon holding them, the
+    daemons vtysh -b applies frr.conf to, so a change or a removal at runtime
+    leaves no copy behind in one of them."""
+    import threading
+    from frrcfgd.frrcfgd import BgpdClientMgr
+    mgr = BgpdClientMgr.__new__(BgpdClientMgr)
+    mgr.lock = threading.Lock()
+    proc = MagicMock(return_value=(True, ''))
+    mgr._BgpdClientMgr__proc_command = proc
+    for table, cmd, daemons in (
+            ('ROUTE_MAP', 'no route-map RM1 permit 10', {'bgpd', 'ospfd', 'pimd', 'mgmtd'}),
+            ('PREFIX', 'no ip prefix-list PS4 permit 10.0.0.0/8', {'zebra', 'bgpd', 'ospfd', 'pimd', 'vrrpd', 'mgmtd'}),
+            ('PREFIX', 'no ipv6 prefix-list PS6 permit fc00::/16', {'zebra', 'bgpd', 'ospfd', 'pimd', 'vrrpd', 'mgmtd'})):
+        proc.reset_mock()
+        assert mgr.run_vtysh_command(table, ['vtysh', '-c', 'configure terminal', '-c', cmd], None)
+        assert [c[0][0] for c in proc.call_args_list] == ['configure terminal', cmd, 'end']
+        assert all(set(c[0][1]) == daemons for c in proc.call_args_list)
+
+@patch.dict('sys.modules', **mockmapping)
+@patch('frrcfgd.frrcfgd.g_run_command')
+def test_ipv6_prefix_daemons(run_cmd):
+    """An IPv6 prefix is applied and removed through the PREFIX daemons, as an
+    IPv4 one is."""
+    from frrcfgd.frrcfgd import BGPConfigDaemon
+    daemon = BGPConfigDaemon()
+    hdlr = {t: h for t, h in daemon.table_handler_list}
+    hdlr['PREFIX_SET']('PREFIX_SET', 'PS6', {'mode': 'IPv6'})
+    for data in ({'action': 'permit'}, None):
+        run_cmd.reset_mock()
+        hdlr['PREFIX']('PREFIX', 'PS6|fc00::/16|exact', data)
+        assert [c[0][1][-1] for c in run_cmd.call_args_list] == \
+            ['{}ipv6 prefix-list PS6 permit fc00::/16'.format('' if data else 'no ')]
+        assert run_cmd.call_args_list[0][0][3] is None
